@@ -1,18 +1,18 @@
-PROG = lab1
+PROG = lab3
 CFLAGS = -g -fPIC -m64 -Wall
 LFLAGS= -fPIC -m64 -Wall
 CC = mpiCC
 
 all: $(PROG)
 
-lab1.o: lab1.cpp
-	$(CC) $(CFLAGS) -c lab1.cpp
+lab3.o: lab3.cpp
+	$(CC) $(CFLAGS) -c lab3.cpp
 
-lab1 : lab1.o
-	$(CC) $(LFLAGS) lab1.o -o lab1
+lab3 : lab3.o
+	$(CC) $(LFLAGS) lab3.o -o lab3
 
 run:
-	mpirun --hostfile hostfile -np 24 lab1
+	mpirun --hostfile hostfile -np 64 lab3
 
 ps:
 	ps -fu $$USER
@@ -20,6 +20,3 @@ ps:
 clean:
 	/bin/rm -f *~
 	/bin/rm -f *.o
-
-test-mpi:
-	mpirun --hostfile hostfile -np 4 lab1

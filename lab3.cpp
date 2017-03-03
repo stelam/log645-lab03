@@ -11,12 +11,13 @@
 
 void print_final_matrix(int *matrix);
 void init_matrix(int *matrix, int matrixSize, int starting_value);
-int get_offset(int k, int i, int j);
+int get_offset(int k, int i, int j, int m, int n);
 int first_traitement(int k, int pval, int i, int j);
 int second_traitement(int k, int pval, int i, int j, int pj);
 void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_rank);
 void first_parallel_operation(int number_of_processors, int processor_rank, int *matrix, int k, int starting_value);
 void second_parallel_operation(int number_of_processors, int processor_rank, int matrix[], int k, int starting_value);
+void sequential();
 
 int main(int argc, char** argv) {
 	const int K = atoi(argv[3]); 
@@ -36,13 +37,15 @@ int main(int argc, char** argv) {
 	initMPI(&argc, &argv, number_of_processors, processor_rank);
 
 	if(atoi(argv[1]) == 1) {
-		first_parallel_operation(number_of_processors, processor_rank, matrix, K, starting_value);
+		//first_parallel_operation(number_of_processors, processor_rank, matrix, K, starting_value);
+		
 	}
 	else {
-		second_parallel_operation(number_of_processors, processor_rank, matrix, K, starting_value);
+		//second_parallel_operation(number_of_processors, processor_rank, matrix, K, starting_value);
 	}
 
 	if(processor_rank == 0) {
+		sequential();
 		gettimeofday (&tp, NULL); // Fin du chronometre
 		timeEnd = (double) (tp.tv_sec) + (double) (tp.tv_usec) / 1e6;
 		Texec = timeEnd - timeStart; //Temps d'execution en secondes
@@ -50,6 +53,8 @@ int main(int argc, char** argv) {
 	}
 
 	MPI_Finalize();
+
+	
 }
 
 /*
@@ -80,10 +85,58 @@ void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_
 *
 *   returns: the 1D index equivalent (offset)
 */
-int get_offset(int k, int i, int j) { 
-	return (k * MATRIX_ROW_LENGTH * MATRIX_ROW_LENGTH) + (i * MATRIX_ROW_LENGTH) + j; 
+int get_offset(int k, int i, int j, int m, int n) { 
+	return (k * m * n) + (i * n) + j; 
 }
 
+
+void sequential() {
+	int t = 0;
+	int m = 10;
+	int n = 5;
+	int np = 100; // nombre de pas
+	double td = 0.0002;
+	double h = 0.1;
+	// int nbproc;
+	double ref1, ref2, ref3, ref4, ref5;
+
+	double matrix[m * n * np];
+
+
+
+	//init
+	for (int j = 0; j < n; j++) {
+		for (int i = 0; i < m; i++) {
+			matrix[get_offset(0, i, j, m, n)] = i * (m - i - 1) * j * (n - j - 1);
+		}
+	}
+
+	//process
+	for (int k = 1; k < np; k++) {
+		for (int j = 0; j < n; j++) {
+			for (int i = 0; i < m; i++) {
+				ref1 = matrix[get_offset(k-1, i, j, m, n)];
+				ref2 = matrix[get_offset(k-1, i-1, j, m, n)];
+				ref3 = matrix[get_offset(k-1, i+1, j, m, n)];
+				ref4 = matrix[get_offset(k-1, i, j-1, m, n)];
+				ref5 = matrix[get_offset(k-1, i, j+1, m, n)];
+				matrix[get_offset(k, i, j, m, n)] = (1 - ((4 * td) / (h*h))) * ref1 + (td / (h*h)) * (ref2+ref3+ref4+ref5);
+				// printf("%9.2f \t", matrix[get_offset(0, i, j, m, n)]);
+				//printf("%d \t", i);
+			}
+		}		
+	}
+
+
+	for (int i = 0; i < 10; i++){
+		for (int j = 0; j < n; j++) {
+			// printf("%9.2d \t", i);
+			printf("%9.2f \t", matrix[get_offset(np - 1, i, j, m, n)]);
+		}
+		printf("\n");
+	}
+	printf("\n\n");
+}
 
 /*
 * Function: first_parallel_operation
@@ -228,7 +281,7 @@ void init_matrix(int *matrix, int matrixSize, int startingValue) {
 void print_final_matrix(int *matrix) {
 	for (int i = 0; i < MATRIX_ROW_LENGTH; i++){
 		for (int j = 0; j < MATRIX_ROW_LENGTH; j++) {
-			printf("%7d \t", matrix[get_offset(0, i, j)]);
+			// printf("%7d \t", matrix[get_offset(0, i, j)]);
 		}
 		printf("\n");
 	}
