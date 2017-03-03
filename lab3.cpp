@@ -6,55 +6,54 @@
 #include <mpi.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <cstddef>
 
-#define MATRIX_ROW_LENGTH 8
+#define SLEEP_TIME 5
 
-void print_final_matrix(int *matrix);
-void init_matrix(int *matrix, int matrixSize, int starting_value);
-int get_offset(int k, int i, int j, int m, int n);
-int first_traitement(int k, int pval, int i, int j);
-int second_traitement(int k, int pval, int i, int j, int pj);
 void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_rank);
+void print_matrix_at_k(double *matrix, int m, int n, int np, int k);
+void init_matrix(double *matrix, int m, int n, int np);
+int get_offset(int k, int i, int j, int m, int n);
 void first_parallel_operation(int number_of_processors, int processor_rank, int *matrix, int k, int starting_value);
 void second_parallel_operation(int number_of_processors, int processor_rank, int matrix[], int k, int starting_value);
-void sequential();
+void sequential(double *matrix, int m, int n, int np, double td, double h);
+void start_timer(double *time_start);
+double stop_timer(double *time_start);
 
 int main(int argc, char** argv) {
-	const int K = atoi(argv[3]); 
-	const int MATRIX_SIZE = MATRIX_ROW_LENGTH * MATRIX_ROW_LENGTH;
+	const int N = atoi(argv[1]);
+	const int M = atoi(argv[2]);
+	const int NP = atoi(argv[3]);
+	const double TD = atof(argv[4]);
+	const double H = atof(argv[5]);
+	const int NB_PROCS = atoi(argv[6]);
 
+	double matrix[M * N * NP];
 	int number_of_processors, processor_rank;
-	int starting_value = atoi(argv[2]);
-	int matrix[MATRIX_SIZE];
-	double timeStart, timeEnd, Texec;
+	double time_seq, time_parallel, acc, time_start;
 
-	// chronomètre
-	struct timeval tp;
-	gettimeofday (&tp, NULL);
-	timeStart = (double) (tp.tv_sec) + (double) (tp.tv_usec) / 1e6;
-	
-	init_matrix(matrix, MATRIX_SIZE, starting_value);
+
 	initMPI(&argc, &argv, number_of_processors, processor_rank);
 
-	if(atoi(argv[1]) == 1) {
-		//first_parallel_operation(number_of_processors, processor_rank, matrix, K, starting_value);
-		
-	}
-	else {
-		//second_parallel_operation(number_of_processors, processor_rank, matrix, K, starting_value);
-	}
-
 	if(processor_rank == 0) {
-		sequential();
-		gettimeofday (&tp, NULL); // Fin du chronometre
-		timeEnd = (double) (tp.tv_sec) + (double) (tp.tv_usec) / 1e6;
-		Texec = timeEnd - timeStart; //Temps d'execution en secondes
-		printf("Temps d execution: %lf\n", Texec);
+		// sequential
+		printf("\n================================== Séquentiel ================================== \n");
+		init_matrix(matrix, M, N, NP);
+		printf("Matrice initiale : \n");
+		print_matrix_at_k(matrix, M, N, NP, 0);
+		start_timer(&time_start);
+		sequential(matrix, M, N, NP, TD, H);
+		printf("Matrice finale : \n");
+		print_matrix_at_k(matrix, M, N, NP, NP - 1);
+		time_seq = stop_timer(&time_start);
+		printf("================================================================================ \n\n\n");
+
+		acc = time_seq/time_parallel;
+		printf("Accéleration: %lf\n\n", acc );
+
 	}
 
-	MPI_Finalize();
-
-	
+	MPI_Finalize();	
 }
 
 /*
@@ -80,36 +79,36 @@ void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_
 *   Transforms a 3D set of params into a 1D param (index) in order to get equivalent index in a 1D array.
 *
 *   k: the k index (iteration #)
-*   i: the i param of a 2D array (x)
-*   j: the j param of a 2D array (y)
+*   i: the i param of a 2D array (m on x axis)
+*   j: the j param of a 2D array (n on y axis)
 *
 *   returns: the 1D index equivalent (offset)
 */
 int get_offset(int k, int i, int j, int m, int n) { 
-	return (k * m * n) + (i * n) + j; 
+	return (k * m * n) + (j * m) + i; 
 }
 
 
-void sequential() {
-	int t = 0;
-	int m = 10;
-	int n = 5;
-	int np = 100; // nombre de pas
-	double td = 0.0002;
-	double h = 0.1;
-	// int nbproc;
+void start_timer(double *time_start) {
+	struct timeval tp;
+	gettimeofday (&tp, NULL); // Debut du chronometre
+	*time_start = (double) (tp.tv_sec) + (double) (tp.tv_usec) / 1e6;
+}
+
+double stop_timer(double *time_start) {
+	struct timeval tp;
+	double timeEnd, Texec;
+	gettimeofday (&tp, NULL); // Fin du chronometre
+	timeEnd = (double) (tp.tv_sec) + (double) (tp.tv_usec) / 1e6;
+	Texec = timeEnd - *time_start; //Temps d'execution en secondes
+	printf("Temps d\'éxecution: %lf\n", Texec);
+	return Texec;
+}
+
+
+void sequential(double *matrix, int m, int n, int np, double td, double h) {
+
 	double ref1, ref2, ref3, ref4, ref5;
-
-	double matrix[m * n * np];
-
-
-
-	//init
-	for (int j = 0; j < n; j++) {
-		for (int i = 0; i < m; i++) {
-			matrix[get_offset(0, i, j, m, n)] = i * (m - i - 1) * j * (n - j - 1);
-		}
-	}
 
 	//process
 	for (int k = 1; k < np; k++) {
@@ -120,22 +119,18 @@ void sequential() {
 				ref3 = matrix[get_offset(k-1, i+1, j, m, n)];
 				ref4 = matrix[get_offset(k-1, i, j-1, m, n)];
 				ref5 = matrix[get_offset(k-1, i, j+1, m, n)];
-				matrix[get_offset(k, i, j, m, n)] = (1 - ((4 * td) / (h*h))) * ref1 + (td / (h*h)) * (ref2+ref3+ref4+ref5);
-				// printf("%9.2f \t", matrix[get_offset(0, i, j, m, n)]);
-				//printf("%d \t", i);
+
+				if (i == 0 || i == m -1 || j == 0 || j == n - 1) {
+					matrix[get_offset(k, i, j, m, n)] = 0;
+				} else {
+					matrix[get_offset(k, i, j, m, n)] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
+				}
+
+				usleep(SLEEP_TIME);
+
 			}
 		}		
 	}
-
-
-	for (int i = 0; i < 10; i++){
-		for (int j = 0; j < n; j++) {
-			// printf("%9.2d \t", i);
-			printf("%9.2f \t", matrix[get_offset(np - 1, i, j, m, n)]);
-		}
-		printf("\n");
-	}
-	printf("\n\n");
 }
 
 /*
@@ -152,7 +147,7 @@ void sequential() {
 */
 void first_parallel_operation(int number_of_processors, int processor_rank, int matrix[], int k, int starting_value) {
 
-	int msg[2]; // 0 = matrix offset, 1 = computed value
+/*	int msg[2]; // 0 = matrix offset, 1 = computed value
 	int received_msg = 0;
 
 	// if proc 0 fails, everything fails
@@ -162,7 +157,7 @@ void first_parallel_operation(int number_of_processors, int processor_rank, int 
 			matrix[msg[0]] = msg[1];
 			received_msg++;
 		}
-		print_final_matrix(matrix);
+		//print_matrix_at_k(matrix);
 		
 	} else {
 		int i = processor_rank / MATRIX_ROW_LENGTH;
@@ -178,7 +173,7 @@ void first_parallel_operation(int number_of_processors, int processor_rank, int 
 		// send the final results to the master
 		msg[1] = final_value;
 		MPI_Send(msg, 2, MPI_INT, 0, 0, MPI_COMM_WORLD);
-	}
+	}*/
 }
 
 
@@ -196,7 +191,7 @@ void first_parallel_operation(int number_of_processors, int processor_rank, int 
 */
 void second_parallel_operation(int number_of_processors, int processor_rank, int matrix[], int k, int starting_value) {
 
-	int msg[2]; // 0 = matrix offset, 1 = computed value
+/*	int msg[2]; // 0 = matrix offset, 1 = computed value
 	int received_msg = 0;
 
 	// if proc 0 fails, everything fails
@@ -206,7 +201,7 @@ void second_parallel_operation(int number_of_processors, int processor_rank, int
 			matrix[msg[0]] = msg[1];
 			received_msg++;
 		}
-		print_final_matrix(matrix);
+		//print_matrix_at_k(matrix);
 		
 	} else {
 		int p_i = processor_rank / MATRIX_ROW_LENGTH;
@@ -249,7 +244,7 @@ void second_parallel_operation(int number_of_processors, int processor_rank, int
 		// send the last value calculated to the master
 		msg[1] = previous_k_value;
 		MPI_Send(msg, 2, MPI_INT, 0, 0, MPI_COMM_WORLD);
-	}
+	}*/
 }
 
 /*
@@ -258,30 +253,37 @@ void second_parallel_operation(int number_of_processors, int processor_rank, int
 *	Initializes each index of an array to a given value
 *
 *   matrix: the 1D array containing the matrixes
-*   matrixSize: the size of one matrix (contained in the array)
-*	starting_value: the value that will be used to set the indexes
+*   m: size on x axis
+*	n: size on y axis
 *
 */
-void init_matrix(int *matrix, int matrixSize, int startingValue) {
-	int i;
-	for (i = 0; i < matrixSize; i++) {
-		matrix[i] = startingValue;
+void init_matrix(double *matrix, int m, int n, int np) {
+	for (int k = 0; k < np; k++) {
+		for (int j = 0; j < n; j++) {
+			for (int i = 0; i < m; i++) {
+				if (k == 0)
+					matrix[get_offset(0, i, j, m, n)] = i * (m - i - 1) * j * (n - j - 1);
+				else {
+					matrix[get_offset(k, i, j, m, n)] = -1;
+				}
+			}
+		}
 	}
 }
 
 
 /*
-* Function: print_final_matrix
+* Function: print_matrix_at_k
 * ----------------------------
 *	Prints the last matrix that is the result of a series of operations
 *
 *   matrix: the 1D array containing the matrix
 *
 */
-void print_final_matrix(int *matrix) {
-	for (int i = 0; i < MATRIX_ROW_LENGTH; i++){
-		for (int j = 0; j < MATRIX_ROW_LENGTH; j++) {
-			// printf("%7d \t", matrix[get_offset(0, i, j)]);
+void print_matrix_at_k(double *matrix, int m, int n, int np, int k) {
+	for (int j = 0; j < n; j++) {
+		for (int i = 0; i < m; i++){
+			printf("%6.1f \t", matrix[get_offset(k, i, j, m, n)]);
 		}
 		printf("\n");
 	}
