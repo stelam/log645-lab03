@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
 		dispatchTask(M, N, NB_PROCS);
 
 	}
-	else {
+	else if(processor_rank < NB_PROCS){
 		executeTask(M, N, TD, H);
 	}
 
@@ -160,39 +160,37 @@ void dispatchTask(int m, int n, int nb_procs) {
 		MPI_Recv(matrix, tailleMatrix+1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 		continu = matrix[tailleMatrix];
 
-		if (continu == 0)
-		{
-			refs[7] = 0;
-			for (int p = 2; p < nb_procs; ++p)
-			{
-				MPI_Send(refs, 8, MPI_DOUBLE, p, 0, MPI_COMM_WORLD);
-			
-			}
-			return;
-		}
+		if (continu != 0)
+		{	
+			for (int j = 0; j < n; j++) {
+				for (int i = 0; i < m; i++) {
+					if (procRank == nb_procs){
+						procRank = 2;
+					}
+					refs[0] = i;
+					refs[1] = j;
+					refs[2] = matrix[get_offset(0, i, j, m, n)];
+					if(i != 0){refs[3] = matrix[get_offset(0, i-1, j, m, n)];}
+					else{refs[3] = 0;}
+					if(i != m-1){refs[4] = matrix[get_offset(0, i+1, j, m, n)];}
+					else{refs[4] = 0;}
+					if(j != 0){refs[5] = matrix[get_offset(0, i, j-1, m, n)];}
+					else{refs[5] = 0;}
+					if(j != n-1){refs[6] = matrix[get_offset(0, i, j+1, m, n)];}
+					else{refs[6] = 0;}
+					refs[7] = 1;
 
-		for (int j = 0; j < n; j++) {
-			for (int i = 0; i < m; i++) {
-				if (procRank == nb_procs){
-					procRank = 2;
+					MPI_Send(refs, 8, MPI_DOUBLE, procRank, 0, MPI_COMM_WORLD);
+					procRank++;
 				}
-				refs[0] = i;
-				refs[1] = j;
-				refs[2] = matrix[get_offset(0, i, j, m, n)];
-				if(i != 0){refs[3] = matrix[get_offset(0, i-1, j, m, n)];}
-				else{refs[3] = 0;}
-				if(i != m-1){refs[4] = matrix[get_offset(0, i+1, j, m, n)];}
-				else{refs[4] = 0;}
-				if(j != 0){refs[5] = matrix[get_offset(0, i, j-1, m, n)];}
-				else{refs[5] = 0;}
-				if(j != n-1){refs[6] = matrix[get_offset(0, i, j+1, m, n)];}
-				else{refs[6] = 0;}
-				refs[7] = 1;
+			}	
+		}	
+	}
 
-				MPI_Send(refs, 8, MPI_DOUBLE, procRank, 0, MPI_COMM_WORLD);
-				procRank++;
-			}
-		}		
+	refs[7] = 0;
+	for (int p = 2; p < nb_procs; ++p)
+	{
+		MPI_Send(refs, 8, MPI_DOUBLE, p, 0, MPI_COMM_WORLD);			
 	}
 }
 
@@ -231,32 +229,30 @@ void executeTask(int m, int n, double td, double h) {
 	while(continu == 1) {
 		MPI_Recv(refs, 8, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 		continu = refs[7];
-		if (continu == 0)
+		
+		if (continu != 0)
 		{
-			return;
+			result[0] = refs[0];
+			result[1] = refs[1];
+			i = (int)refs[0];
+			j = (int)refs[1];
+			ref1 = refs[2];
+			ref2 = refs[3];
+			ref3 = refs[4];
+			ref4 = refs[5];
+			ref5 = refs[6];
+			
+			if (i == 0 || i == m -1 || j == 0 || j == n - 1) {
+				result[2] = 0;
+			}
+			else {
+				result[2] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
+			}
+			usleep(SLEEP_TIME);
+			
+			MPI_Send(result, 3, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
 		}
-
-		result[0] = refs[0];
-		result[1] = refs[1];
-		i = (int)refs[0];
-		j = (int)refs[1];
-		ref1 = refs[2];
-		ref2 = refs[3];
-		ref3 = refs[4];
-		ref4 = refs[5];
-		ref5 = refs[6];
-		
-		if (i == 0 || i == m -1 || j == 0 || j == n - 1) {
-			result[2] = 0;
-		}
-		else {
-			result[2] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
-		}
-		usleep(SLEEP_TIME);
-		
-		MPI_Send(result, 3, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
 	}
-	
 }
 
 /*
