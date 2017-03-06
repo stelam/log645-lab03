@@ -14,8 +14,9 @@ void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_
 void print_matrix_at_k(double *matrix, int m, int n, int np, int k);
 void init_matrix(double *matrix, int m, int n, int np);
 int get_offset(int k, int i, int j, int m, int n);
-void first_parallel_operation(int number_of_processors, int processor_rank, int *matrix, int k, int starting_value);
-void second_parallel_operation(int number_of_processors, int processor_rank, int matrix[], int k, int starting_value);
+void dispatchTask(int m, int n, int nb_procs);
+void processResult(double *matrix, int m, int n, int np);
+void executeTask(int m, int n, double td, double h);
 void sequential(double *matrix, int m, int n, int np, double td, double h);
 void start_timer(double *time_start);
 double stop_timer(double *time_start);
@@ -36,21 +37,35 @@ int main(int argc, char** argv) {
 	initMPI(&argc, &argv, number_of_processors, processor_rank);
 
 	if(processor_rank == 0) {
-		// sequential
-		printf("\n================================== Séquentiel ================================== \n");
+		printf("\n================================== Initiale ================================== \n");
 		init_matrix(matrix, M, N, NP);
 		printf("Matrice initiale : \n");
 		print_matrix_at_k(matrix, M, N, NP, 0);
+		printf("\n================================== Séquentiel ================================== \n");
 		start_timer(&time_start);
 		sequential(matrix, M, N, NP, TD, H);
 		printf("Matrice finale : \n");
 		print_matrix_at_k(matrix, M, N, NP, NP - 1);
 		time_seq = stop_timer(&time_start);
-		printf("================================================================================ \n\n\n");
+		printf("\n================================== Parallel ================================== \n");
+		init_matrix(matrix, M, N, NP);
+		start_timer(&time_start);
+		processResult(matrix, M, N, NP);
+		printf("Matrice finale : \n");
+		print_matrix_at_k(matrix, M, N, NP, NP - 1);
+		time_parallel = stop_timer(&time_start);
+		printf("================================================================================ \n");
 
 		acc = time_seq/time_parallel;
 		printf("Accéleration: %lf\n\n", acc );
 
+	}
+	else if(processor_rank == 1) {
+		dispatchTask(M, N, NB_PROCS);
+
+	}
+	else {
+		executeTask(M, N, TD, H);
 	}
 
 	MPI_Finalize();	
@@ -115,10 +130,14 @@ void sequential(double *matrix, int m, int n, int np, double td, double h) {
 		for (int j = 0; j < n; j++) {
 			for (int i = 0; i < m; i++) {
 				ref1 = matrix[get_offset(k-1, i, j, m, n)];
-				ref2 = matrix[get_offset(k-1, i-1, j, m, n)];
-				ref3 = matrix[get_offset(k-1, i+1, j, m, n)];
-				ref4 = matrix[get_offset(k-1, i, j-1, m, n)];
-				ref5 = matrix[get_offset(k-1, i, j+1, m, n)];
+				if(i != 0){ref2 = matrix[get_offset(k-1, i-1, j, m, n)];}
+				else{ref2 = 0;}
+				if(i != m-1){ref3 = matrix[get_offset(k-1, i+1, j, m, n)];}
+				else{ref3 = 0;}
+				if(j != 0){ref4 = matrix[get_offset(k-1, i, j-1, m, n)];}
+				else{ref4 = 0;}
+				if(j != n-1){ref5 = matrix[get_offset(k-1, i, j+1, m, n)];}
+				else{ref5 = 0;}
 
 				if (i == 0 || i == m -1 || j == 0 || j == n - 1) {
 					matrix[get_offset(k, i, j, m, n)] = 0;
@@ -133,118 +152,111 @@ void sequential(double *matrix, int m, int n, int np, double td, double h) {
 	}
 }
 
-/*
-* Function: first_parallel_operation
-* ----------------------------
-*	Performs the first operation of the lab
-*
-*   number_of_processors: the number of available processors for the parallel processing
-*   processor_rank: the rank of the current processor
-*	matrix: the matrix that will contain the final results
-*	k: the number of alterations to perform
-*	starting_value: the initialization value for the initial matrix cells
-*
-*/
-void first_parallel_operation(int number_of_processors, int processor_rank, int matrix[], int k, int starting_value) {
+void dispatchTask(int m, int n, int nb_procs) {
+	int procRank = 2, tailleMatrix = m * n;
+	double matrix[tailleMatrix+1], refs[8], continu = 1;
+	
+	while (continu == 1) {
+		MPI_Recv(matrix, tailleMatrix+1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		continu = matrix[tailleMatrix];
 
-/*	int msg[2]; // 0 = matrix offset, 1 = computed value
-	int received_msg = 0;
-
-	// if proc 0 fails, everything fails
-	if (processor_rank == 0) {
-		while (received_msg < (number_of_processors - 1) ) {
-			MPI_Recv(msg, 2, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-			matrix[msg[0]] = msg[1];
-			received_msg++;
-		}
-		//print_matrix_at_k(matrix);
-		
-	} else {
-		int i = processor_rank / MATRIX_ROW_LENGTH;
-		int j = processor_rank % MATRIX_ROW_LENGTH;
-		msg[0] = processor_rank;
-
-		int final_value = starting_value;
-		for (int current_k = 1; current_k <= k; current_k++) {
-			usleep(1000);
-			final_value = final_value + (i+j) * current_k;
+		if (continu == 0)
+		{
+			refs[7] = 0;
+			for (int p = 2; p < nb_procs; ++p)
+			{
+				MPI_Send(refs, 8, MPI_DOUBLE, p, 0, MPI_COMM_WORLD);
+			
+			}
+			return;
 		}
 
-		// send the final results to the master
-		msg[1] = final_value;
-		MPI_Send(msg, 2, MPI_INT, 0, 0, MPI_COMM_WORLD);
-	}*/
+		for (int j = 0; j < n; j++) {
+			for (int i = 0; i < m; i++) {
+				if (procRank == nb_procs){
+					procRank = 2;
+				}
+				refs[0] = i;
+				refs[1] = j;
+				refs[2] = matrix[get_offset(0, i, j, m, n)];
+				if(i != 0){refs[3] = matrix[get_offset(0, i-1, j, m, n)];}
+				else{refs[3] = 0;}
+				if(i != m-1){refs[4] = matrix[get_offset(0, i+1, j, m, n)];}
+				else{refs[4] = 0;}
+				if(j != 0){refs[5] = matrix[get_offset(0, i, j-1, m, n)];}
+				else{refs[5] = 0;}
+				if(j != n-1){refs[6] = matrix[get_offset(0, i, j+1, m, n)];}
+				else{refs[6] = 0;}
+				refs[7] = 1;
+
+				MPI_Send(refs, 8, MPI_DOUBLE, procRank, 0, MPI_COMM_WORLD);
+				procRank++;
+			}
+		}		
+	}
 }
 
+void processResult(double *matrix, int m, int n, int np) {
+	int tailleMatrix = m * n, ri, rj;
+	double currentMatrix[tailleMatrix+1], result[3], res;
 
-/*
-* Function: second_parallel_operation
-* ----------------------------
-*	Performs the second operation of the lab
-*
-*   number_of_processors: the number of available processors for the parallel processing
-*   processor_rank: the rank of the current processor
-*	matrix: the matrix that will contain the final results
-*	k: the number of alterations to perform
-*	starting_value: the initialization value for the initial matrix cells
-*
-*/
-void second_parallel_operation(int number_of_processors, int processor_rank, int matrix[], int k, int starting_value) {
-
-/*	int msg[2]; // 0 = matrix offset, 1 = computed value
-	int received_msg = 0;
-
-	// if proc 0 fails, everything fails
-	if (processor_rank == 0) {
-		while (received_msg < (number_of_processors - 1) ) {
-			MPI_Recv(msg, 2, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-			matrix[msg[0]] = msg[1];
-			received_msg++;
+	for (int j = 0; j < n; j++) {
+		for (int i = 0; i < m; i++) {
+			currentMatrix[get_offset(0, i, j, m, n)] = matrix[get_offset(0, i, j, m, n)];
 		}
-		//print_matrix_at_k(matrix);
+	}
+	currentMatrix[tailleMatrix] = 1;
+	
+	for (int k = 1; k < np; k++) {
+		MPI_Send(currentMatrix, tailleMatrix+1, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+		for (int j = 0; j < n; j++) {
+			for (int i = 0; i < m; i++) {
+				MPI_Recv(result, 3, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+				ri = (int)(result[0]);
+				rj = (int)(result[1]);
+				res = result[2];
+				matrix[get_offset(k, ri, rj, m, n)] = res;
+				currentMatrix[get_offset(0, ri, rj, m, n)] = res;
+			}
+		}
+	}
+	currentMatrix[tailleMatrix] = 0;
+	MPI_Send(currentMatrix, tailleMatrix+1, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+}
+
+void executeTask(int m, int n, double td, double h) {
+	double refs[8], ref1, ref2, ref3, ref4, ref5, result[3], continu = 1;
+	int i, j; 
+
+	while(continu == 1) {
+		MPI_Recv(refs, 8, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		continu = refs[7];
+		if (continu == 0)
+		{
+			return;
+		}
+
+		result[0] = refs[0];
+		result[1] = refs[1];
+		i = (int)refs[0];
+		j = (int)refs[1];
+		ref1 = refs[2];
+		ref2 = refs[3];
+		ref3 = refs[4];
+		ref4 = refs[5];
+		ref5 = refs[6];
 		
-	} else {
-		int p_i = processor_rank / MATRIX_ROW_LENGTH;
-		int p_j = processor_rank % MATRIX_ROW_LENGTH;
-		int previousProcessor = processor_rank-1;
-		int nextProcessor = processor_rank+1;
-		msg[0] = processor_rank;
-
-		int previous_k_value = starting_value;
-		int previous_j_value = starting_value;
-
-
-		// for each k
-		for (int current_k = 1; current_k <= k; current_k++) {
-
-			if(p_j == 0)
-			{
-				previous_k_value = previous_k_value + (p_i * current_k);
-				usleep(1000);
-				MPI_Send(&previous_k_value, 1, MPI_INT, nextProcessor, 0, MPI_COMM_WORLD);
-			}
-			else
-			{
-				//processor 0 never sends any message, so previous j equals to the starting value for processor 1
-				if(processor_rank != 1) {
-					MPI_Recv(&previous_j_value, 1, MPI_INT, previousProcessor, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-				}
-
-				previous_k_value = previous_k_value + (previous_j_value * current_k);
-				usleep(1000);
-				
-				if (p_j != 7)
-				{	
-					MPI_Send(&previous_k_value, 1, MPI_INT, nextProcessor, 0, MPI_COMM_WORLD);
-				}
-			}
-			
+		if (i == 0 || i == m -1 || j == 0 || j == n - 1) {
+			result[2] = 0;
 		}
-
-		// send the last value calculated to the master
-		msg[1] = previous_k_value;
-		MPI_Send(msg, 2, MPI_INT, 0, 0, MPI_COMM_WORLD);
-	}*/
+		else {
+			result[2] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
+		}
+		usleep(SLEEP_TIME);
+		
+		MPI_Send(result, 3, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+	}
+	
 }
 
 /*
@@ -270,7 +282,6 @@ void init_matrix(double *matrix, int m, int n, int np) {
 		}
 	}
 }
-
 
 /*
 * Function: print_matrix_at_k
