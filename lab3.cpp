@@ -10,6 +10,7 @@
 #include <vector>
 
 #define SLEEP_TIME 5
+#define MAX_NB_NEIGHBORS 4
 
 void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_rank);
 void print_matrix_at_k(double *matrix, int m, int n, int np, int k);
@@ -23,7 +24,7 @@ double stop_timer(double *time_start);
 
 bool is_offset_on_border(int offset, int m, int n);
 int* get_i_j_from_offset(int offset, int m, int n);
-std::vector<int> get_neighbors_offsets(int offset, int nb_procs, int m, int n);
+std::vector<int> get_neighbors_offsets(int offset, int nb_procs, int proc_rank, int m, int n);
 std::vector<int> get_managed_cells_offsets(int proc_rank, int nb_procs, int k, int m, int n);
 
 int main(int argc, char** argv) {
@@ -59,15 +60,21 @@ int main(int argc, char** argv) {
 		init_matrix(matrix, M, N, NP);
 		printf("Matrice initiale : \n");
 		print_matrix_at_k(matrix, M, N, NP, 0);
-		MPI_Barrier(MPI_COMM_WORLD);
 		start_timer(&time_start);
 
+	} else {
+		init_matrix(matrix, M, N, NP);	
 	}
 
 
-
-	parallel (number_of_processors, processor_rank, matrix, M, N, NP, TD, H, NB_PROCS);
-
+	MPI_Barrier(MPI_COMM_WORLD);
+	if (number_of_processors > (M*N))
+		number_of_processors = M * N;
+	if (processor_rank < (M * N)) {
+		parallel(number_of_processors, processor_rank, matrix, M, N, NP, TD, H, NB_PROCS);
+	}
+	
+	MPI_Barrier(MPI_COMM_WORLD);
 
 	if (processor_rank == 0) {
 		time_parallel = stop_timer(&time_start);
@@ -171,7 +178,7 @@ void sequential(double *matrix, int m, int n, int np, double td, double h) {
 *	starting_value: the initialization value for the initial matrix cells
 *
 */
-void parallel(int number_of_processors, int processor_rank, double *matrix, int m, int n, int np, double td, double h, int nb_procs) {
+void parallel(int number_of_processors, int processor_rank, double matrix[], int m, int n, int np, double td, double h, int nb_procs) {
 
 	double ref1, ref2, ref3, ref4, ref5;
 	std::vector<int> managed_cells_offsets;
@@ -179,34 +186,49 @@ void parallel(int number_of_processors, int processor_rank, double *matrix, int 
 	int offset, i, j, target_proc_rank, received_msg, expected_nb_msg;
 	int matrix_size = m * n;
 	double neighbors_sum;
-	std::vector<double> messages[4];
-	std::vector<double> managed_values(((matrix_size + number_of_processors - 1) / number_of_processors) * 2); //[value, offset]
+	std::vector<std::vector<double> > messages(4);
+	std::vector<double> managed_values(((matrix_size + number_of_processors - 1) / number_of_processors)); //[value, offset]
 	std::vector<double> message(3); //[value, offset, proc_rank]
 	//double message[3];
 
+	// printf("WAITING MSG 1 %6.1f\n", matrix[12]);
 	for (int k = 1; k < np; k++) {
-
+		// MPI_Barrier(MPI_COMM_WORLD);
 		managed_cells_offsets = get_managed_cells_offsets(processor_rank, number_of_processors, k, m, n);
-		neighbors_offsets = get_neighbors_offsets(offset, number_of_processors, m, n);
+		
 
 
+		// printf("WAITING MSG 1 %6.1d\n", k);			
 
-		// go through all the managed cells
-		for (int c; c < managed_cells_offsets.size(); c++) {
+		// printf("WAITING MSG 1 %6.1f\n", matrix[12]);
+
+		
+
+		// go through all the managed cells of current k
+		for (int c = 0; c < 1; c++) {
 			/*printf("IN %d\n", managed_cells_offsets.size());*/
+
 			offset = managed_cells_offsets[c];
 			i = offset % m;
-			j = offset / m;
-			managed_values[(2*c)+1] = offset;
+			j = (offset - ((k)*matrix_size)) / m;
+			// if (j > 4)
+			// 	printf("%d for k=%d : (%d - (%d * %d)) / % d\n", j,k, offset, k, matrix_size, m);
+			// printf("WAITING MSG 1 %6.1d\n", managed_values.size());	
 
-			printf("IN %d\n", k);
+			neighbors_offsets = get_neighbors_offsets(offset, processor_rank, number_of_processors, m, n);
+
+
+
+			// printf("WAITING MSG 1 %6.1f\n", managed_values[1]);
+
+			// printf("WAITING MSG 1 %6.1f\n", matrix[12]);
 
 			// if the current cell is in border, just set it to 0
 			if (i == 0 || i == m - 1 || j == 0 || j == n - 1) {
-				managed_values[2*c] = 0;
-				printf("IN %d\n", k);
+				managed_values[c] = 0;
+				// printf("WAITING MSG 2 %6.1f\n", matrix[12]);
 			} else {
-				printf("IN %d\n", k);
+				//printf("WAITING MSG 3 %6.1d\n", k);
 				// if in first iteration, all values are already available from initialization
 				if (k == 1) {
 					ref1 = matrix[get_offset(k-1, i, j, m, n)];
@@ -215,28 +237,30 @@ void parallel(int number_of_processors, int processor_rank, double *matrix, int 
 					ref4 = matrix[get_offset(k-1, i, j-1, m, n)];
 					ref5 = matrix[get_offset(k-1, i, j+1, m, n)];
 
-					managed_values[2*c] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
+					//printf("WAITING MSG 1 %6.1d\n", get_offset(k-1, i, j, m, n));
+					
 
-
+					managed_values[c] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
+					usleep(SLEEP_TIME);
+					
 
 				
 				// for the following iterations ...
 				} else {
 					// wait for neighbors messages
 					received_msg = 0;
-					expected_nb_msg = 0;
+					expected_nb_msg = neighbors_offsets[4];
 					neighbors_sum = 0;
 
-					for (int d = 0; d < 4; d++) {
-						if (neighbors_offsets[d] >= 0) {
-							expected_nb_msg++;
-						}
-					}
-
 					while (received_msg < expected_nb_msg) {
-						MPI_Recv(&message, 3, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+						// printf("Expecting %d messages\n", expected_nb_msg);
+						message.resize(3); // not sure if useful
+						MPI_Recv(message.data(), 3, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+						// printf("WAITING MSG 1 %6.1f\n", message[2]);
 						messages[received_msg] = message;
 						received_msg++;
+						// printf("Received %d/%d messages for ij %d,%d \n", received_msg, expected_nb_msg, i, j);
+
 					}
 
 					for (int d = 0; d < received_msg; d++) {
@@ -244,29 +268,44 @@ void parallel(int number_of_processors, int processor_rank, double *matrix, int 
 					}
 
 					// calculate new value
-					ref1 = managed_values[2*c]; // previous k
-					managed_values[2*c] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (neighbors_sum);
+					ref1 = managed_values[c]; // previous k
+					managed_values[c] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (neighbors_sum);
+					usleep(SLEEP_TIME);
 
 				}
 
 
 				// construct message to send
-				message[0] = managed_values[2*c]; // the value to send
-				message[1] = offset;
-				message[2] = processor_rank;
+				message[0] = managed_values[c]; // the value to send
+				message[1] = offset * 1.0;
+				message[2] = processor_rank * 1.0;
 
 				// send message to neighbors
-				for (int d = 0; d < 4; d++) {
+
+				for (int d = 0; d < MAX_NB_NEIGHBORS; d++) {
 					if (neighbors_offsets[d] >= 0) { // send messages only to neighbors that aren't in borders
 						target_proc_rank = neighbors_offsets[d] % number_of_processors;
-						MPI_Send(&message, 3, MPI_DOUBLE, target_proc_rank, 0, MPI_COMM_WORLD);
+						// printf("SENDING to %6.1d for offset %d\n", target_proc_rank, neighbors_offsets[d]);
+						MPI_Send(message.data(), 3, MPI_DOUBLE, target_proc_rank, 0, MPI_COMM_WORLD);
 					}
 
 				}
-
 			}
 
 		}	
+
+		// printf("WAITING MSG 1 %6.1d\n", k);
+	}
+
+	if (processor_rank != 0) {
+		MPI_Send(message.data(), 3, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+	} else {
+		received_msg = 0;
+		while (received_msg < (m * n) - 1) {
+			MPI_Recv(message.data(), 3, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			matrix[(int)message[1]] = message[0];
+			received_msg++;
+		}
 	}
 
 	// printf("Fini pour proc %6.1f\n", managed_values[0]);
@@ -289,7 +328,7 @@ void init_matrix(double *matrix, int m, int n, int np) {
 				if (k == 0)
 					matrix[get_offset(0, i, j, m, n)] = i * (m - i - 1) * j * (n - j - 1);
 				else {
-					matrix[get_offset(k, i, j, m, n)] = -1;
+					matrix[get_offset(k, i, j, m, n)] = 0;
 				}
 			}
 		}
@@ -308,7 +347,7 @@ void init_matrix(double *matrix, int m, int n, int np) {
 void print_matrix_at_k(double *matrix, int m, int n, int np, int k) {
 	for (int j = 0; j < n; j++) {
 		for (int i = 0; i < m; i++){
-			printf("%6.1f \t", matrix[get_offset(k, i, j, m, n)]);
+			printf("%9.3f \t", matrix[get_offset(k, i, j, m, n)]);
 		}
 		printf("\n");
 	}
@@ -344,7 +383,11 @@ std::vector<int> get_managed_cells_offsets(int proc_rank, int nb_procs, int k, i
 	// less tasks than cpus (could be optimized? or merge with one of the
 	// other conditions later if no optimization)
 	} else if (matrix_size < nb_procs) {
-		managed_cells.push_back(get_offset(k, i, j, m, n));
+		if (proc_rank <= matrix_size){
+			// printf("ij %d,%d for proc %d at managed offset %d\n", i, j, proc_rank, get_offset(k, i, j, m, n));
+			managed_cells.push_back(get_offset(k, i, j, m, n));			
+		}
+
 
 	// equal number of tasks and cpus
 	} else {
@@ -356,8 +399,13 @@ std::vector<int> get_managed_cells_offsets(int proc_rank, int nb_procs, int k, i
 
 // for each managed cell, we need to find the related neighbors
 // the proc_rank can be determined by the offset by doing offset % nb_procs
-std::vector<int> get_neighbors_offsets(int offset, int nb_procs, int m, int n) {
-	std::vector<int> neighbors(4);
+std::vector<int> get_neighbors_offsets(int offset, int proc_rank, int nb_procs, int m, int n) {
+	std::vector<int> neighbors(5);
+	int nb_valid_neighbors = 4;
+
+	int i, j;
+	i = offset % m;
+	j = offset / m;
 
 	// identify neighbors
 	neighbors[0] = offset - m;
@@ -370,13 +418,16 @@ std::vector<int> get_neighbors_offsets(int offset, int nb_procs, int m, int n) {
 		// if the neighbor is on a border
 		if (is_offset_on_border(neighbors[c], m, n)) {
 			neighbors[c] = -1;
+			nb_valid_neighbors--;
 
 		// or if the current cell is on a border
 		} else if (is_offset_on_border(offset, m, n)) {
 			neighbors[c] = -1;
+			nb_valid_neighbors--;
 		}
 	}
-
+	neighbors[4] = nb_valid_neighbors;
+	// printf("Valid neighbors: %d for ij %d, %d of proc# %d of offset %d \n", nb_valid_neighbors, i, j, proc_rank, offset);
 	return neighbors;
 
 }
@@ -391,8 +442,10 @@ int* get_i_j_from_offset(int offset, int m, int n) {
 }
 
 bool is_offset_on_border(int offset, int m, int n) {
-	int i, j;
+	int i, j, k;
+
+	k = offset / (m * n);
 	i = offset % m;
-	j = offset / m;
+	j = (offset - ((k)*m*n)) / m;
 	return (i == 0 || i == m -1 || j == 0 || j == n - 1);
 }
