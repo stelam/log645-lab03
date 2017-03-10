@@ -37,6 +37,8 @@ int main(int argc, char** argv) {
 
 	initMPI(&argc, &argv, number_of_processors, processor_rank);
 
+	int nbCaseCalc = ((M*N) - (2*M + 2*N -4) + 2);
+
 	if(processor_rank == 0) {
 		printf("\n================================== Initiale ================================== \n");
 		init_matrix(matrix, M, N);
@@ -54,7 +56,7 @@ int main(int argc, char** argv) {
 		processResult(matrix, M, N, NP);
 		time_parallel = stop_timer(&time_start);
 		printf("Matrice finale : \n");
-		print_matrix_at_k(matrix, M, N);
+		print_matrix_at_k(matrix, M, N) ;
 		printf("================================================================================ \n");
 
 		acc = time_seq/time_parallel;
@@ -62,10 +64,10 @@ int main(int argc, char** argv) {
 
 	}
 	else if(processor_rank == 1) {
-		dispatchTask(M, N, NB_PROCS);
+		(NB_PROCS < nbCaseCalc)?dispatchTask(M, N, NB_PROCS):dispatchTask(M, N, nbCaseCalc);		
 
 	}
-	else if(processor_rank < NB_PROCS){
+	else if(processor_rank < NB_PROCS && processor_rank < nbCaseCalc){
 		executeTask(M, N, TD, H);
 	}
 
@@ -133,19 +135,15 @@ void sequential(double *matrix, int m, int n, int np, double td, double h) {
 
 		for (int j = 0; j < n; j++) {
 			for (int i = 0; i < m; i++) {
-				ref1 = matrixCurrent[get_offset(i, j, m, n)];
-				if(i != 0){ref2 = matrixCurrent[get_offset(i-1, j, m, n)];}
-				else{ref2 = 0;}
-				if(i != m-1){ref3 = matrixCurrent[get_offset(i+1, j, m, n)];}
-				else{ref3 = 0;}
-				if(j != 0){ref4 = matrixCurrent[get_offset(i, j-1, m, n)];}
-				else{ref4 = 0;}
-				if(j != n-1){ref5 = matrixCurrent[get_offset(i, j+1, m, n)];}
-				else{ref5 = 0;}
-
 				if (i == 0 || i == m -1 || j == 0 || j == n - 1) {
 					matrix[get_offset(i, j, m, n)] = 0;
 				} else {
+					ref1 = matrixCurrent[get_offset(i, j, m, n)];
+					ref2 = matrixCurrent[get_offset(i-1, j, m, n)];
+					ref3 = matrixCurrent[get_offset(i+1, j, m, n)];
+					ref4 = matrixCurrent[get_offset(i, j-1, m, n)];
+					ref5 = matrixCurrent[get_offset(i, j+1, m, n)];
+									
 					matrix[get_offset(i, j, m, n)] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
 				}
 
@@ -166,22 +164,18 @@ void dispatchTask(int m, int n, int nb_procs) {
 
 		if (continu != 0)
 		{	
-			for (int j = 0; j < n; j++) {
-				for (int i = 0; i < m; i++) {
+			for (int j = 1; j < n-1; j++) {
+				for (int i = 1; i < m-1; i++) {
 					if (procRank == nb_procs){
 						procRank = 2;
 					}
 					refs[0] = i;
 					refs[1] = j;
 					refs[2] = matrix[get_offset(i, j, m, n)];
-					if(i != 0){refs[3] = matrix[get_offset(i-1, j, m, n)];}
-					else{refs[3] = 0;}
-					if(i != m-1){refs[4] = matrix[get_offset(i+1, j, m, n)];}
-					else{refs[4] = 0;}
-					if(j != 0){refs[5] = matrix[get_offset(i, j-1, m, n)];}
-					else{refs[5] = 0;}
-					if(j != n-1){refs[6] = matrix[get_offset(i, j+1, m, n)];}
-					else{refs[6] = 0;}
+					refs[3] = matrix[get_offset(i-1, j, m, n)];
+					refs[4] = matrix[get_offset(i+1, j, m, n)];
+					refs[5] = matrix[get_offset(i, j-1, m, n)];
+					refs[6] = matrix[get_offset(i, j+1, m, n)];
 					refs[7] = 1;
 
 					MPI_Send(refs, 8, MPI_DOUBLE, procRank, 0, MPI_COMM_WORLD);
@@ -207,8 +201,8 @@ void processResult(double *matrix, int m, int n, int np) {
 	
 	for (int k = 1; k < np; k++) {
 		MPI_Send(matrixCurrent, tailleMatrix+1, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
-		for (int j = 0; j < n; j++) {
-			for (int i = 0; i < m; i++) {
+		for (int j = 1; j < n-1; j++) {
+			for (int i = 1; i < m-1; i++) {
 				MPI_Recv(result, 3, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 				ri = (int)(result[0]);
 				rj = (int)(result[1]);
@@ -285,7 +279,7 @@ void init_matrix(double *matrix, int m, int n) {
 void print_matrix_at_k(double *matrix, int m, int n) {
 	for (int j = 0; j < n; j++) {
 		for (int i = 0; i < m; i++){
-			printf("%6.1f \t", matrix[get_offset(i, j, m, n)]);
+			printf("%9.3f \t", matrix[get_offset(i, j, m, n)]);
 		}
 		printf("\n");
 	}
