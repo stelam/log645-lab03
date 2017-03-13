@@ -197,7 +197,7 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 	double top_reference_value, right_reference_value, bottom_reference_value, left_reference_value, z_reference_value;
 	std::vector<int> managed_cells_offsets; // for a given k
 
-	int local_offset, global_offset, global_i, global_j, inner_i, inner_j, current_managed_value_inner_i, current_managed_value_inner_j, nb_received_msg, nb_expected_msg;
+	int local_offset, global_offset, global_i, global_j, inner_i, inner_j, current_managed_value_inner_i, current_managed_value_inner_j, nb_received_msg, nb_expected_msg, nb_received_final_msg;
 	int inner_matrix_size = (m-2) * (n-2); // inner matrix size
 	double dependencies_value_sum, current_cell_value;
 
@@ -350,16 +350,18 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 					// MPI_Irecv(message.data(), 5, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &request);
 					// store the message
 
-					// if (proc_rank == 0) {
-					// 	// receiving the final messages
-					// 	if ((int)message[2] == -1) {
-					// 		matrix[(int)message[1]] = message[0];
-					// 	} else {
-					// 		messages[(int)message[3]].push_back(message);
-					// 	}
-					// } else {
+					if (proc_rank == 0) {
+						// receiving the final messages while proc is still not done doing its job
+						if ((int)message[2] == -1) {
+							// printf("received final message\n");
+							matrix[(int)message[1]] = message[0];
+							nb_received_final_msg++;
+						} else {
+							messages[(int)message[3]].push_back(message);
+						}
+					} else {
 						messages[(int)message[3]].push_back(message);
-					// }
+					}
 
 
 					if ((int) message[3] == k && (int)message[2] == local_offset) {
@@ -429,7 +431,7 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 		global_i = (int)managed_values[np-1][d][1] % (m-2);
 		global_j = (int)managed_values[np-1][d][1] / (m-2);
 
-		global_offset = get_offset_from_inner_i_j(np, global_i, global_j, m, n);
+		global_offset = get_offset_from_inner_i_j(np-1, global_i, global_j, m, n);
 		final_message[0] = managed_values[np-1][d][0];
 		final_message[1] = global_offset * 1.0;
 		final_message[2] = -1;
@@ -437,27 +439,29 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 
 		if (proc_rank != 0){
 			// printf("I am %d sending %f for offset %f\n", proc_rank, final_message[0], final_message[1]);
-			MPI_Send(final_message, 2, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+			MPI_Send(final_message, 5, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
 		} else {
 			matrix[global_offset] = final_message[0];
 		}
 	}
-		
-	// if (proc_rank == 0) {
-	// 	nb_received_msg = 0;
-	// 	nb_expected_msg = inner_matrix_size - (int)managed_values[np-1].size();
-	// 	// printf("expecting %d\n", nb_expected_msg);
 
-	// 	while (nb_received_msg < nb_expected_msg) {
-	// 		MPI_Recv(final_message, 2, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-	// 		matrix[(int)final_message[1]] = final_message[0];
-	// 		nb_received_msg++;
-	// 	}
-	// }
+
+	if (proc_rank == 0) {
+		nb_received_msg = 0;
+		nb_expected_msg = inner_matrix_size - (int)managed_values[np-1].size() - nb_received_final_msg;
+		printf("expecting %d\n", nb_expected_msg);
+
+		while (nb_received_msg < nb_expected_msg) {
+			MPI_Recv(final_message, 5, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			matrix[(int)final_message[1]] = final_message[0];
+			nb_received_msg++;
+		}
+	}
 
 	// printf("Fini pour proc %6.1f\n", managed_values[0]);
 
 	// printf("I am %d and i finished\n", proc_rank);
+
 }
 
 /*
