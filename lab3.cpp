@@ -10,22 +10,27 @@
 #include <vector>
 
 #define SLEEP_TIME 5
-#define MAX_NB_NEIGHBORS 4
+#define MAX_NB_DEPENDENCIES 5
 
-void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_rank);
+#define TOP_DEPENDENCY 0
+#define RIGHT_DEPENDENCY 1
+#define BOTTOM_DEPENDENCY 2
+#define LEFT_DEPENDENCY 3
+#define Z_DEPENDENCY 4
+
+
+void initMPI(int *argc, char ***argv, int &nb_procs, int &proc_rank);
 void print_matrix_at_k(double *matrix, int m, int n, int np, int k);
 void init_matrix(double *matrix, int m, int n, int np);
 int get_offset(int k, int i, int j, int m, int n);
-void parallel(int number_of_processors, int processor_rank, double *matrix, int m, int n, int np, double td, double h, int nb_procs);
+void parallel(int nb_procs, int proc_rank, double *matrix, int m, int n, int np, double td, double h);
 void sequential(double *matrix, int m, int n, int np, double td, double h);
 void start_timer(double *time_start);
 double stop_timer(double *time_start);
 
-
-bool is_offset_on_border(int offset, int m, int n);
-int* get_i_j_from_offset(int offset, int m, int n);
-std::vector<int> get_neighbors_offsets(int offset, int nb_procs, int proc_rank, int m, int n);
-std::vector<int> get_managed_cells_offsets(int proc_rank, int nb_procs, int k, int m, int n);
+std::vector<std::vector<int> > get_dependency_procs(int local_offset, int nb_procs, int k, int m, int n, bool backward);
+std::vector<bool> get_dependency_directions(int local_offset, int m, int n);
+std::vector<int> get_managed_cells_by_k(int proc_rank, int nb_procs, int k, int m, int n);
 
 int main(int argc, char** argv) {
 	const int N = atoi(argv[1]);
@@ -36,13 +41,13 @@ int main(int argc, char** argv) {
 	const int NB_PROCS = atoi(argv[6]);
 
 	double matrix[M * N * NP];
-	int number_of_processors, processor_rank;
+	int nb_procs, proc_rank;
 	double time_seq, time_parallel, acc, time_start;
 
 
-	initMPI(&argc, &argv, number_of_processors, processor_rank);
+	initMPI(&argc, &argv, nb_procs, proc_rank);
 
-	if(processor_rank == 0) {
+	if(proc_rank == 0) {
 		// sequential
 		printf("\n================================== Séquentiel ================================== \n");
 		init_matrix(matrix, M, N, NP);
@@ -67,16 +72,19 @@ int main(int argc, char** argv) {
 	}
 
 
-	MPI_Barrier(MPI_COMM_WORLD);
-	if (number_of_processors > (M*N))
-		number_of_processors = M * N;
-	if (processor_rank < (M * N)) {
-		parallel(number_of_processors, processor_rank, matrix, M, N, NP, TD, H, NB_PROCS);
+	// MPI_Barrier(MPI_COMM_WORLD);
+	if (NB_PROCS > (M-2)*(N-2))
+		nb_procs = (M-2) * (N-2);
+	else
+		nb_procs = NB_PROCS;
+
+	if (proc_rank < nb_procs) {
+		parallel(nb_procs, proc_rank, matrix, M, N, NP, TD, H);
 	}
 	
-	MPI_Barrier(MPI_COMM_WORLD);
+	// MPI_Barrier(MPI_COMM_WORLD);
 
-	if (processor_rank == 0) {
+	if (proc_rank == 0) {
 		time_parallel = stop_timer(&time_start);
 		printf("Matrice finale : \n");
 		print_matrix_at_k(matrix, M, N, NP, NP - 1);
@@ -96,14 +104,14 @@ int main(int argc, char** argv) {
 *
 *   argc: main's argc
 *	argv: to main's argv
-*	number_of_processors: pointer to the variable
-*	number_of_processors: pointer to the variable
+*	nb_procs: pointer to the variable
+*	nb_procs: pointer to the variable
 *
 */
-void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_rank) {
+void initMPI(int *argc, char ***argv, int &nb_procs, int &proc_rank) {
 	MPI_Init(&*argc, &*argv);
-	MPI_Comm_size(MPI_COMM_WORLD, &number_of_processors);
-	MPI_Comm_rank(MPI_COMM_WORLD, &processor_rank);
+	MPI_Comm_size(MPI_COMM_WORLD, &nb_procs);
+	MPI_Comm_rank(MPI_COMM_WORLD, &proc_rank);
 }
 
 /*
@@ -121,6 +129,9 @@ int get_offset(int k, int i, int j, int m, int n) {
 	return (k * m * n) + (j * m) + i; 
 }
 
+int get_offset_from_inner_i_j(int k, int inner_i, int inner_j, int m, int n) {
+	return (k * m * n) + ((inner_j+1) * m) + inner_i;
+}
 
 void start_timer(double *time_start) {
 	struct timeval tp;
@@ -166,149 +177,257 @@ void sequential(double *matrix, int m, int n, int np, double td, double h) {
 	}
 }
 
+
 /*
 * Function: first_parallel_operation
 * ----------------------------
 *	Performs the first operation of the lab
 *
-*   number_of_processors: the number of available processors for the parallel processing
-*   processor_rank: the rank of the current processor
+*   nb_procs: the number of available processors for the parallel processing
+*   proc_rank: the rank of the current processor
 *	matrix: the matrix that will contain the final results
 *	k: the number of alterations to perform
 *	starting_value: the initialization value for the initial matrix cells
 *
 */
-void parallel(int number_of_processors, int processor_rank, double matrix[], int m, int n, int np, double td, double h, int nb_procs) {
+void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np, double td, double h) {
 
-	double ref1, ref2, ref3, ref4, ref5;
-	std::vector<int> managed_cells_offsets;
-	std::vector<int> neighbors_offsets;
-	int offset, i, j, target_proc_rank, received_msg, expected_nb_msg;
-	int matrix_size = m * n;
-	double neighbors_sum;
-	std::vector<std::vector<double> > messages(4);
-	std::vector<double> managed_values(((matrix_size + number_of_processors - 1) / number_of_processors)); //[value, offset]
-	std::vector<double> message(3); //[value, offset, proc_rank]
-	//double message[3];
+	double top_reference_value, right_reference_value, bottom_reference_value, left_reference_value, z_reference_value;
+	std::vector<int> managed_cells_offsets; // for a given k
+	std::vector<int> dependency_offsets; // for a given k
+
+	int local_offset, global_offset, global_i, global_j, inner_i, inner_j, current_managed_value_inner_i, current_managed_value_inner_j, nb_received_msg, nb_expected_msg;
+	int inner_matrix_size = (m-2) * (n-2); // inner matrix size
+	double dependencies_value_sum, current_cell_value;
+
+	std::vector<std::vector<std::vector<double> > > messages((inner_matrix_size / nb_procs) * (np+1));
+	// std::vector<double> managed_values(((matrix_size + nb_procs - 1) / nb_procs)); //[value, local_offset, k]
+	std::vector<std::vector<std::vector<double> > > managed_values(np); // [k][managed_value_index][value, local_offset]
+	std::vector<double> message(5); //[value, offset, proc_rank]
+
+	std::vector<std::vector<int> > dependencies_proc_ranks, target_dependant_proc_ranks;
+	std::vector<bool> dependency_directions;
+
+	std::vector<int> self_dependencies_directions(MAX_NB_DEPENDENCIES);
 
 	// printf("WAITING MSG 1 %6.1f\n", matrix[12]);
 	for (int k = 1; k < np; k++) {
 		// MPI_Barrier(MPI_COMM_WORLD);
-		managed_cells_offsets = get_managed_cells_offsets(processor_rank, number_of_processors, k, m, n);
+		managed_cells_offsets = get_managed_cells_by_k(proc_rank, nb_procs, k, m, n);
 		
-
-
-		// printf("WAITING MSG 1 %6.1d\n", k);			
-
-		// printf("WAITING MSG 1 %6.1f\n", matrix[12]);
-
-		
-
 		// go through all the managed cells of current k
-		for (int c = 0; c < 1; c++) {
+		for (int cell_index = 0; cell_index < (int)managed_cells_offsets.size(); cell_index++) {
 			/*printf("IN %d\n", managed_cells_offsets.size());*/
 
-			offset = managed_cells_offsets[c];
-			i = offset % m;
-			j = (offset - ((k)*matrix_size)) / m;
-			// if (j > 4)
-			// 	printf("%d for k=%d : (%d - (%d * %d)) / % d\n", j,k, offset, k, matrix_size, m);
-			// printf("WAITING MSG 1 %6.1d\n", managed_values.size());	
+			local_offset = managed_cells_offsets[cell_index];
+			inner_i = local_offset % m;
+			inner_j = local_offset / m;
 
-			neighbors_offsets = get_neighbors_offsets(offset, processor_rank, number_of_processors, m, n);
+			// if (proc_rank == 3)
+			// 	printf("I am proc %d during k=%d, managing offset %d \n", proc_rank, k, local_offset);
+
+			//neighbors_offsets = get_neighbors_offsets(offset, proc_rank, nb_procs, m, n);
+	
+
+			// wait for neighbors messages
+			nb_received_msg = 0;
+			dependencies_value_sum = 0;
+			nb_expected_msg = 0;
+			top_reference_value = 0;
+			right_reference_value = 0;
+			bottom_reference_value = 0;
+			left_reference_value = 0;
+			z_reference_value = 0;
+
+			dependencies_proc_ranks = get_dependency_procs(local_offset, nb_procs, k, m, n, true);
+			target_dependant_proc_ranks = get_dependency_procs(local_offset, nb_procs, k, m, n, false);
+
+			// calculate the number of expected messages coming from dependencies
+			for (int d = 0; d < MAX_NB_DEPENDENCIES; d++) {
+				// if (proc_rank == 0){
+				// 	if (local_offset == 6) {
+				// 		printf("\t\t%d\n", dependencies_proc_ranks[d][0]);
+				// 	}
+				// }
+
+				if (dependencies_proc_ranks[d][0] != proc_rank && dependencies_proc_ranks[d][0] > -1)
+					nb_expected_msg++;
+				else
+					self_dependencies_directions.push_back(d);
+			}
 
 
+			//printf("WAITING MSG 3 %6.1d\n", k);
+			// if in first iteration, all values are already available from initialization
+			if (k == 1) {
+				dependency_directions = get_dependency_directions(local_offset, m, n);
+				z_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i, inner_j, m, n)];
+				if (dependency_directions[TOP_DEPENDENCY] == true) top_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i, inner_j+1, m, n)];
+				if (dependency_directions[RIGHT_DEPENDENCY] == true) right_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i+1, inner_j, m, n)];
+				if (dependency_directions[BOTTOM_DEPENDENCY] == true) bottom_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i, inner_j-1, m, n)];
+				if (dependency_directions[LEFT_DEPENDENCY] == true) left_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i-1, inner_j, m, n)];
+				//printf("WAITING MSG 1 %6.1d\n", get_offset(k-1, i, j, m, n));
 
-			// printf("WAITING MSG 1 %6.1f\n", managed_values[1]);
-
-			// printf("WAITING MSG 1 %6.1f\n", matrix[12]);
-
-			// if the current cell is in border, just set it to 0
-			if (i == 0 || i == m - 1 || j == 0 || j == n - 1) {
-				managed_values[c] = 0;
-				// printf("WAITING MSG 2 %6.1f\n", matrix[12]);
-			} else {
-				//printf("WAITING MSG 3 %6.1d\n", k);
-				// if in first iteration, all values are already available from initialization
-				if (k == 1) {
-					ref1 = matrix[get_offset(k-1, i, j, m, n)];
-					ref2 = matrix[get_offset(k-1, i-1, j, m, n)];
-					ref3 = matrix[get_offset(k-1, i+1, j, m, n)];
-					ref4 = matrix[get_offset(k-1, i, j-1, m, n)];
-					ref5 = matrix[get_offset(k-1, i, j+1, m, n)];
-
-					//printf("WAITING MSG 1 %6.1d\n", get_offset(k-1, i, j, m, n));
-					
-
-					managed_values[c] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
-					usleep(SLEEP_TIME);
-					
-
+				current_cell_value = ((1 - ((4 * td) / (h*h))) * z_reference_value) + (td / (h*h)) * (top_reference_value+right_reference_value+bottom_reference_value+left_reference_value);
 				
-				// for the following iterations ...
-				} else {
-					// wait for neighbors messages
-					received_msg = 0;
-					expected_nb_msg = neighbors_offsets[4];
-					neighbors_sum = 0;
+				// store managed values
+				managed_values[k].push_back({current_cell_value, local_offset * 1.0});
 
-					while (received_msg < expected_nb_msg) {
-						// printf("Expecting %d messages\n", expected_nb_msg);
-						message.resize(3); // not sure if useful
-						MPI_Recv(message.data(), 3, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-						// printf("WAITING MSG 1 %6.1f\n", message[2]);
-						messages[received_msg] = message;
-						received_msg++;
-						// printf("Received %d/%d messages for ij %d,%d \n", received_msg, expected_nb_msg, i, j);
+				usleep(SLEEP_TIME);
+		
+			// for the following iterations ...
+			} else {
 
+				if (proc_rank == 0) {
+					// printf("%d yay\n", k);
+				}
+
+				// printf("%d\n", proc_rank);
+				// get the needed values associated with self-dependencies
+				for (int d = 0; d < (int)self_dependencies_directions.size(); d++) {
+					for (int managed_value_index = 0; managed_value_index < (int)managed_values[k-1].size(); managed_value_index++) {
+
+						current_managed_value_inner_i = (int)managed_values[k-1][managed_value_index][1] % (m-2);
+						current_managed_value_inner_j = (int)managed_values[k-1][managed_value_index][1] / (m-2);
+
+						if (self_dependencies_directions[d] == Z_DEPENDENCY){
+							if (current_managed_value_inner_i == inner_i && current_managed_value_inner_j == inner_j)
+								z_reference_value = managed_values[k-1][managed_value_index][0];
+
+						} else if (self_dependencies_directions[d] == TOP_DEPENDENCY){
+							if (current_managed_value_inner_i == inner_i && current_managed_value_inner_j == inner_j+1){
+								top_reference_value = managed_values[k-1][managed_value_index][0];
+								dependencies_value_sum += top_reference_value;
+							}
+
+						} else if (self_dependencies_directions[d] == RIGHT_DEPENDENCY){
+							if (current_managed_value_inner_i == inner_i+1 && current_managed_value_inner_j == inner_j){
+								right_reference_value = managed_values[k-1][managed_value_index][0];
+								dependencies_value_sum += right_reference_value;
+							}
+
+						} else if (self_dependencies_directions[d] == BOTTOM_DEPENDENCY){
+							if (current_managed_value_inner_i == inner_i && current_managed_value_inner_j == inner_j-1){
+								bottom_reference_value = managed_values[k-1][managed_value_index][0];
+								dependencies_value_sum += bottom_reference_value;
+							}
+
+						} else if (self_dependencies_directions[d] == LEFT_DEPENDENCY){
+							if (current_managed_value_inner_i == inner_i-1 && current_managed_value_inner_j == inner_j){
+								left_reference_value = managed_values[k-1][managed_value_index][0];
+								dependencies_value_sum += left_reference_value;
+							}
+						} 
+					}
+				}
+
+				// check if we previously received some message(s) for the current k
+				// if so, update the quantity of messages (if any) are still expected
+				if (messages[k].size() > 0) {
+					for (int msg_index = 0; msg_index < (int) messages[k].size(); msg_index++) {
+						if ((int)messages[k][msg_index][2] == local_offset) {
+							nb_received_msg++;
+						}
+					}	
+				}
+
+				// wait for messages
+				while (nb_received_msg < nb_expected_msg) {
+					// printf("Expecting %d messages\n", expected_nb_msg);
+					message.resize(5);
+					MPI_Recv(message.data(), 5, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+					// store the message
+					messages[(int)message[3]].push_back(message);
+
+					if ((int) message[3] == k && (int)message[2] == local_offset) {
+						nb_received_msg++;
+						// if (proc_rank == 0)
+						// printf("I am %d at k=%d managing offset %d, I received %d/%d\n", proc_rank, k, local_offset, nb_received_msg, nb_expected_msg);
 					}
 
-					for (int d = 0; d < received_msg; d++) {
-						neighbors_sum += messages[d][0];
-					}
+					// if (proc_rank == 0)
+					// printf("I am %d at k=%d, I received a message from %d for local_offset = %d at k = %d, but I want one for local_offset = %d \n", proc_rank, k, (int)message[1], (int)message[3], (int)message[2], local_offset);
+			
 
-					// calculate new value
-					ref1 = managed_values[c]; // previous k
-					managed_values[c] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (neighbors_sum);
-					usleep(SLEEP_TIME);
+					// printf("I am %d, I received %d/%d\n", proc_rank, nb_received_msg, nb_expected_msg);
 
 				}
 
-
-				// construct message to send
-				message[0] = managed_values[c]; // the value to send
-				message[1] = offset * 1.0;
-				message[2] = processor_rank * 1.0;
-
-				// send message to neighbors
-
-				for (int d = 0; d < MAX_NB_NEIGHBORS; d++) {
-					if (neighbors_offsets[d] >= 0) { // send messages only to neighbors that aren't in borders
-						target_proc_rank = neighbors_offsets[d] % number_of_processors;
-						// printf("SENDING to %6.1d for offset %d\n", target_proc_rank, neighbors_offsets[d]);
-						MPI_Send(message.data(), 3, MPI_DOUBLE, target_proc_rank, 0, MPI_COMM_WORLD);
+				// calculate the sum of the 4 neighbors
+				// and get the z-dependency value (if applicable)
+				if (nb_expected_msg > 0) {
+					for (int msg_index = 0; msg_index < nb_expected_msg; msg_index++) {
+						if ((int)messages[k][msg_index][2] == local_offset && (int)messages[k][msg_index][4] != local_offset) {
+							dependencies_value_sum += messages[k][msg_index][0];
+						} else if ((int)messages[k][msg_index][4] == local_offset) {
+							z_reference_value = messages[k][msg_index][0];
+						}
 					}
+				}
 
+				// calculate the value for current cell
+				current_cell_value = ((1 - ((4 * td) / (h*h))) * z_reference_value) + (td / (h*h)) * (dependencies_value_sum);
+				managed_values[k].push_back({current_cell_value, local_offset * 1.0});
+				usleep(SLEEP_TIME);
+
+			}
+
+
+			// construct message to send
+			message[0] = current_cell_value; // the value to send
+			message[1] = proc_rank * 1.0;
+			message[2] = -1; // target_local_offset, defined later;
+			message[3] = k+1; // target_k
+			message[4] = local_offset * 1.0;
+
+
+
+			// send message to neighbors
+			for (int d = 0; d < MAX_NB_DEPENDENCIES; d++) {
+				if (target_dependant_proc_ranks[d][0] >= 0 && target_dependant_proc_ranks[d][0] != proc_rank) {
+					message[2] = target_dependant_proc_ranks[d][1]; // target_local_offset
+					// if (proc_rank == 1)
+					// 	printf("\t\tI am %d at k = %d, managing offset %d, sending to proc %d at offset %d\n", proc_rank, k, local_offset, target_dependant_proc_ranks[d][0], (int)message[2]);
+					MPI_Send(message.data(), 5, MPI_DOUBLE, target_dependant_proc_ranks[d][0], 0, MPI_COMM_WORLD);
 				}
 			}
 
 		}	
-
-		// printf("WAITING MSG 1 %6.1d\n", k);
 	}
 
-	if (processor_rank != 0) {
-		MPI_Send(message.data(), 3, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
-	} else {
-		received_msg = 0;
-		while (received_msg < (m * n) - 1) {
-			MPI_Recv(message.data(), 3, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-			matrix[(int)message[1]] = message[0];
-			received_msg++;
+	double final_message[2];
+
+/*	for (int d = 0; d < (int)managed_values[np-1].size(); d++) {
+		global_i = (int)managed_values[np-1][d][1] % (m-2);
+		global_j = (int)managed_values[np-1][d][1] / (m-2);
+
+		global_offset = get_offset_from_inner_i_j(np, global_i, global_j, m, n);
+		final_message[0] = managed_values[np-1][d][0];
+		final_message[1] = global_offset * 1.0;
+
+		if (proc_rank != 0){
+			// printf("I am %d sending %f for offset %f\n", proc_rank, final_message[0], final_message[1]);
+			MPI_Send(final_message, 2, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
+		} else {
+			matrix[global_offset] = final_message[0];
 		}
 	}
+		
+	if (proc_rank == 0) {
+		nb_received_msg = 0;
+		nb_expected_msg = inner_matrix_size - (int)managed_values[np-1].size();
+		// printf("expecting %d\n", nb_expected_msg);
+
+		while (nb_received_msg < nb_expected_msg) {
+			MPI_Recv(final_message, 2, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+			matrix[(int)final_message[1]] = final_message[0];
+			nb_received_msg++;
+		}
+	}*/
 
 	// printf("Fini pour proc %6.1f\n", managed_values[0]);
+
+	// printf("I am %d and i finished\n", proc_rank);
 }
 
 /*
@@ -347,7 +466,7 @@ void init_matrix(double *matrix, int m, int n, int np) {
 void print_matrix_at_k(double *matrix, int m, int n, int np, int k) {
 	for (int j = 0; j < n; j++) {
 		for (int i = 0; i < m; i++){
-			printf("%9.3f \t", matrix[get_offset(k, i, j, m, n)]);
+			printf("%5.1f \t", matrix[get_offset(k, i, j, m, n)]);
 		}
 		printf("\n");
 	}
@@ -355,97 +474,95 @@ void print_matrix_at_k(double *matrix, int m, int n, int np, int k) {
 }
 
 
-/*
-* Function: get_managed_cells_offsets
-* ----------------------------
-*	For a given proc rank, returns the corresponding managed cells, using a cyclic distribution
-*
-*   proc_rank: the rank of the processor
-*
-*/
-std::vector<int> get_managed_cells_offsets(int proc_rank, int nb_procs, int k, int m, int n) {
-	int matrix_size = m * n;
-	int nb_managed_cells = 1;
-	int i, j;
+std::vector<int> get_managed_cells_by_k(int proc_rank, int nb_procs, int k, int m, int n) {
+	int first_proc_rank = (((m-2)*(n-2))*k) % nb_procs;
+	int offset_index;
 	std::vector<int> managed_cells;
 
-	i = proc_rank % m;
-	j = proc_rank / m;
-
-	// more tasks than cpus
-	if (matrix_size > nb_procs) {
-		nb_managed_cells = (matrix_size + nb_procs - 1) / nb_procs;
-
-		for (int c; c < nb_managed_cells; c++) {
-			managed_cells.push_back(get_offset(k, i, j, m, n) + (c * nb_procs));
-		}
-
-	// less tasks than cpus (could be optimized? or merge with one of the
-	// other conditions later if no optimization)
-	} else if (matrix_size < nb_procs) {
-		if (proc_rank <= matrix_size){
-			// printf("ij %d,%d for proc %d at managed offset %d\n", i, j, proc_rank, get_offset(k, i, j, m, n));
-			managed_cells.push_back(get_offset(k, i, j, m, n));			
-		}
-
-
-	// equal number of tasks and cpus
+	if (proc_rank == first_proc_rank) {
+		managed_cells.push_back(0);
 	} else {
-		managed_cells.push_back(get_offset(k, i, j, m, n));
+		if (proc_rank > first_proc_rank)
+			managed_cells.push_back(proc_rank - first_proc_rank);
+		else
+			managed_cells.push_back(nb_procs - abs(first_proc_rank - proc_rank));
+	}
+
+	offset_index = managed_cells[0];
+
+	while (offset_index < (m-2)*(n-2)) {
+		offset_index += nb_procs;
+		if (offset_index < (m-2)*(n-2)){
+			managed_cells.push_back(offset_index);
+		}
 	}
 
 	return managed_cells;
 }
 
-// for each managed cell, we need to find the related neighbors
-// the proc_rank can be determined by the offset by doing offset % nb_procs
-std::vector<int> get_neighbors_offsets(int offset, int proc_rank, int nb_procs, int m, int n) {
-	std::vector<int> neighbors(5);
-	int nb_valid_neighbors = 4;
 
-	int i, j;
-	i = offset % m;
-	j = offset / m;
+std::vector<std::vector<int> > get_dependency_procs(int local_offset, int nb_procs, int k, int m, int n, bool backward) {
+	int first_proc_rank;
+	std::vector<std::vector<int> > dependencies = {{-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}}; // [proc_rank, proc_offset]
+	std::vector<bool> dependency_directions;
 
-	// identify neighbors
-	neighbors[0] = offset - m;
-	neighbors[1] = offset - 1;
-	neighbors[2] = offset + 1;
-	neighbors[3] = offset + m;
+	first_proc_rank = (backward == true) ? (((m-2)*(n-2)) * (k-1)) % nb_procs : (((m-2)*(n-2)) * (k+1)) % nb_procs;
 
-	// detect borders
-	for (int c = 0; c < 4; c++) {
-		// if the neighbor is on a border
-		if (is_offset_on_border(neighbors[c], m, n)) {
-			neighbors[c] = -1;
-			nb_valid_neighbors--;
+	// if (!backward && first_proc_rank <= nb_procs) first_proc_rank = 0;
 
-		// or if the current cell is on a border
-		} else if (is_offset_on_border(offset, m, n)) {
-			neighbors[c] = -1;
-			nb_valid_neighbors--;
-		}
+	// if (local_offset % nb_procs >= first_proc_rank) 
+	// 	dependencies[Z_DEPENDENCY][0] = (local_offset % nb_procs) - first_proc_rank;
+	// else
+	// 	dependencies[Z_DEPENDENCY][0] = (local_offset % nb_procs) + first_proc_rank; 
+
+	dependencies[Z_DEPENDENCY][0] = (local_offset + first_proc_rank) % nb_procs;
+
+	dependencies[Z_DEPENDENCY][1] = local_offset;
+	dependency_directions = get_dependency_directions(local_offset, m, n);
+
+	if (dependency_directions[LEFT_DEPENDENCY] == true) {
+		dependencies[LEFT_DEPENDENCY][0] = (dependencies[Z_DEPENDENCY][0] - 1 < 0) ? nb_procs - 1 : dependencies[Z_DEPENDENCY][0] - 1;
+		dependencies[LEFT_DEPENDENCY][1] = local_offset - 1;
 	}
-	neighbors[4] = nb_valid_neighbors;
-	// printf("Valid neighbors: %d for ij %d, %d of proc# %d of offset %d \n", nb_valid_neighbors, i, j, proc_rank, offset);
-	return neighbors;
+
+	if (dependency_directions[TOP_DEPENDENCY] == true) {
+		dependencies[TOP_DEPENDENCY][0] = dependencies[Z_DEPENDENCY][0] + ((m-2) % nb_procs);
+		if (dependencies[TOP_DEPENDENCY][0] > nb_procs) { 
+			dependencies[TOP_DEPENDENCY][0] = abs(nb_procs - dependencies[TOP_DEPENDENCY][0]);
+		} else if (dependencies[TOP_DEPENDENCY][0] == nb_procs) {
+			dependencies[TOP_DEPENDENCY][0] = 0;
+		}
+		dependencies[TOP_DEPENDENCY][1] = local_offset + (m-2);
+	}
+
+	if (dependency_directions[RIGHT_DEPENDENCY]) {
+		dependencies[RIGHT_DEPENDENCY][0] = (dependencies[Z_DEPENDENCY][0] + 1 >= nb_procs) ? 0 : dependencies[Z_DEPENDENCY][0] + 1;
+		dependencies[RIGHT_DEPENDENCY][1] = local_offset + 1;
+	}
+
+	if (dependency_directions[BOTTOM_DEPENDENCY]) {
+		dependencies[BOTTOM_DEPENDENCY][0] = dependencies[Z_DEPENDENCY][0] - ((m-2) % nb_procs);
+		if (dependencies[BOTTOM_DEPENDENCY][0] < 0) {
+			dependencies[BOTTOM_DEPENDENCY][0] += nb_procs;
+		}
+		dependencies[BOTTOM_DEPENDENCY][1] = local_offset - (m-2);
+	}
+
+	return dependencies;
 
 }
 
-
-int* get_i_j_from_offset(int offset, int m, int n) {
+std::vector<bool> get_dependency_directions(int local_offset, int m, int n) {
 	int i, j;
-	i = offset % m;
-	j = offset / m;
-	int ij[2] = {i, j};
-	return ij;
-}
+	i = local_offset % (m-2);
+	j = local_offset / (m-2);
 
-bool is_offset_on_border(int offset, int m, int n) {
-	int i, j, k;
+	std::vector<bool> directions = {true, true, true, true, true};
 
-	k = offset / (m * n);
-	i = offset % m;
-	j = (offset - ((k)*m*n)) / m;
-	return (i == 0 || i == m -1 || j == 0 || j == n - 1);
+	if (i == 0) directions[LEFT_DEPENDENCY] = false;
+	if (i == (m-2)-1) directions[RIGHT_DEPENDENCY] = false;
+	if (j == 0) directions[BOTTOM_DEPENDENCY] = false;
+	if (j == (n-2)-1) directions[TOP_DEPENDENCY] = false;
+
+	return directions;
 }

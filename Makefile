@@ -1,5 +1,5 @@
 PROG = lab3
-CFLAGS = -g -fPIC -m64 -Wall
+CFLAGS = -g -fPIC -m64 -Wall -std=c++11
 LFLAGS= -fPIC -m64 -Wall
 CC = mpiCC
 
