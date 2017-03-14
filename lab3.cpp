@@ -20,13 +20,15 @@
 
 
 void initMPI(int *argc, char ***argv, int &nb_procs, int &proc_rank);
-void print_matrix_at_k(double *matrix, int m, int n, int np, int k);
-void init_matrix(double *matrix, int m, int n, int np);
-int get_offset(int k, int i, int j, int m, int n);
+void print_matrix_at_k(double *matrix, int m, int n);
+void init_matrix(double *matrix, int m, int n);
+int get_offset(int i, int j, int m, int n);
+int get_offset_from_inner_i_j(int inner_i, int inner_j, int m, int n);
 void parallel(int nb_procs, int proc_rank, double *matrix, int m, int n, int np, double td, double h);
 void sequential(double *matrix, int m, int n, int np, double td, double h);
 void start_timer(double *time_start);
 double stop_timer(double *time_start);
+void copyMatrix(double *matrixSource, double *matrixDest, int n, int m);
 
 std::vector<std::vector<int> > get_dependency_procs(int local_offset, int nb_procs, int k, int m, int n, bool backward);
 std::vector<int> get_dependency_directions(int local_offset, int m, int n);
@@ -40,42 +42,41 @@ int main(int argc, char** argv) {
 	const double H = atof(argv[5]);
 	const int NB_PROCS = atoi(argv[6]);
 
-	double matrix[M * N * NP];
+	double matrix[M * N];
 	int nb_procs, proc_rank;
 	double time_seq, time_parallel, acc, time_start;
 
 
 	initMPI(&argc, &argv, nb_procs, proc_rank);
 
-	if (proc_rank != 0){
-		init_matrix(matrix, M, N, NP);	
-	}
-
 	if(proc_rank == 0) {
 		// sequential
 		printf("\n================================== Séquentiel ================================== \n");
-		init_matrix(matrix, M, N, NP);
+		init_matrix(matrix, M, N);
 		printf("Matrice initiale : \n");
-		print_matrix_at_k(matrix, M, N, NP, 0);
+		print_matrix_at_k(matrix, M, N);
 		start_timer(&time_start);
 		sequential(matrix, M, N, NP, TD, H);
 		time_seq = stop_timer(&time_start);
 		printf("Matrice finale : \n");
-		print_matrix_at_k(matrix, M, N, NP, NP - 1);
+		print_matrix_at_k(matrix, M, N);
 		printf("================================================================================ \n\n\n");
 
 		// parallel
 		printf("\n================================== Parallèle ================================== \n");
-		init_matrix(matrix, M, N, 2);
+		init_matrix(matrix, M, N);
 		printf("Matrice initiale : \n");
-		print_matrix_at_k(matrix, M, N, NP, 0);
-		start_timer(&time_start);
+		print_matrix_at_k(matrix, M, N);
 
 	} else {
-		init_matrix(matrix, M, N, 2);
+		init_matrix(matrix, M, N);
 	}
 
-	// MPI_Barrier(MPI_COMM_WORLD);
+	MPI_Barrier(MPI_COMM_WORLD);
+	if (proc_rank == 0) {
+		start_timer(&time_start);
+	}
+	
 	if (NB_PROCS > (M-2)*(N-2))
 		nb_procs = (M-2) * (N-2);
 	else
@@ -93,7 +94,7 @@ int main(int argc, char** argv) {
 	if (proc_rank == 0) {
 		time_parallel = stop_timer(&time_start);
 		printf("Matrice finale : \n");
-		print_matrix_at_k(matrix, M, N, NP, 1);
+		print_matrix_at_k(matrix, M, N);
 		printf("================================================================================ \n\n\n");
 		acc = time_seq/time_parallel;
 		printf("Accéleration: %lf\n\n", acc );
@@ -131,12 +132,12 @@ void initMPI(int *argc, char ***argv, int &nb_procs, int &proc_rank) {
 *
 *   returns: the 1D index equivalent (offset)
 */
-int get_offset(int k, int i, int j, int m, int n) { 
-	return (k * m * n) + (j * m) + i; 
+int get_offset(int i, int j, int m, int n) { 
+	return (j * m) + i; 
 }
 
-int get_offset_from_inner_i_j(int k, int inner_i, int inner_j, int m, int n) {
-	return (k * m * n) + ((inner_j+1) * m) + inner_i + 1;
+int get_offset_from_inner_i_j(int inner_i, int inner_j, int m, int n) {
+	return ((inner_j+1) * m) + inner_i + 1;
 }
 
 void start_timer(double *time_start) {
@@ -158,22 +159,25 @@ double stop_timer(double *time_start) {
 
 void sequential(double *matrix, int m, int n, int np, double td, double h) {
 
-	double ref1, ref2, ref3, ref4, ref5;
+	double ref1, ref2, ref3, ref4, ref5, matrixCurrent[m * n];
 
 	//process
 	for (int k = 1; k < np; k++) {
+
+	copyMatrix(matrix, matrixCurrent, n, m);
+
 		for (int j = 0; j < n; j++) {
 			for (int i = 0; i < m; i++) {
-				ref1 = matrix[get_offset(k-1, i, j, m, n)];
-				ref2 = matrix[get_offset(k-1, i-1, j, m, n)];
-				ref3 = matrix[get_offset(k-1, i+1, j, m, n)];
-				ref4 = matrix[get_offset(k-1, i, j-1, m, n)];
-				ref5 = matrix[get_offset(k-1, i, j+1, m, n)];
-
 				if (i == 0 || i == m -1 || j == 0 || j == n - 1) {
-					matrix[get_offset(k, i, j, m, n)] = 0;
+					matrix[get_offset(i, j, m, n)] = 0;
 				} else {
-					matrix[get_offset(k, i, j, m, n)] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
+					ref1 = matrixCurrent[get_offset(i, j, m, n)];
+					ref2 = matrixCurrent[get_offset(i-1, j, m, n)];
+					ref3 = matrixCurrent[get_offset(i+1, j, m, n)];
+					ref4 = matrixCurrent[get_offset(i, j-1, m, n)];
+					ref5 = matrixCurrent[get_offset(i, j+1, m, n)];
+									
+					matrix[get_offset(i, j, m, n)] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
 				}
 
 				usleep(SLEEP_TIME);
@@ -276,11 +280,11 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 			if (k == 1) {
 				dependency_directions = get_dependency_directions(local_offset, m, n);
 				// printf("dd %d\n", dependency_directions[TOP_DEPENDENCY]);
-				z_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i, inner_j, m, n)];
-				if (dependency_directions[TOP_DEPENDENCY] == 1) top_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i, inner_j+1, m, n)];
-				if (dependency_directions[RIGHT_DEPENDENCY] == 1) right_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i+1, inner_j, m, n)];
-				if (dependency_directions[BOTTOM_DEPENDENCY] == 1) bottom_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i, inner_j-1, m, n)];
-				if (dependency_directions[LEFT_DEPENDENCY] == 1) left_reference_value = matrix[get_offset_from_inner_i_j(k-1, inner_i-1, inner_j, m, n)];
+				z_reference_value = matrix[get_offset_from_inner_i_j(inner_i, inner_j, m, n)];
+				if (dependency_directions[TOP_DEPENDENCY] == 1) top_reference_value = matrix[get_offset_from_inner_i_j(inner_i, inner_j+1, m, n)];
+				if (dependency_directions[RIGHT_DEPENDENCY] == 1) right_reference_value = matrix[get_offset_from_inner_i_j(inner_i+1, inner_j, m, n)];
+				if (dependency_directions[BOTTOM_DEPENDENCY] == 1) bottom_reference_value = matrix[get_offset_from_inner_i_j(inner_i, inner_j-1, m, n)];
+				if (dependency_directions[LEFT_DEPENDENCY] == 1) left_reference_value = matrix[get_offset_from_inner_i_j(inner_i-1, inner_j, m, n)];
 				//printf("WAITING MSG 1 %6.1d\n", get_offset(k-1, i, j, m, n));
 				// printf("dd %d\n", dependency_directions[LEFT_DEPENDENCY]);
 				current_cell_value = ((1 - ((4 * td) / (h*h))) * z_reference_value) + (td / (h*h)) * (top_reference_value+right_reference_value+bottom_reference_value+left_reference_value);
@@ -465,7 +469,7 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 		global_i = (int)managed_values[np-1][d][1] % (m-2);
 		global_j = (int)managed_values[np-1][d][1] / (m-2);
 
-		global_offset = get_offset_from_inner_i_j(1, global_i, global_j, m, n);
+		global_offset = get_offset_from_inner_i_j(global_i, global_j, m, n);
 		final_message[0] = managed_values[np-1][d][0];
 		final_message[1] = global_offset * 1.0;
 		final_message[2] = -2 * 1.0;
@@ -515,18 +519,13 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 *	n: size on y axis
 *
 */
-void init_matrix(double *matrix, int m, int n, int np) {
-	for (int k = 0; k < np; k++) {
-		for (int j = 0; j < n; j++) {
-			for (int i = 0; i < m; i++) {
-				if (k == 0)
-					matrix[get_offset(0, i, j, m, n)] = i * (m - i - 1) * j * (n - j - 1);
-				else {
-					matrix[get_offset(k, i, j, m, n)] = 0;
-				}
-			}
+void init_matrix(double *matrix, int m, int n) {
+	for (int j = 0; j < n; j++) {
+		for (int i = 0; i < m; i++) {
+			matrix[get_offset(i, j, m, n)] = i * (m - i - 1) * j * (n - j - 1);
 		}
 	}
+	
 }
 
 
@@ -538,14 +537,22 @@ void init_matrix(double *matrix, int m, int n, int np) {
 *   matrix: the 1D array containing the matrix
 *
 */
-void print_matrix_at_k(double *matrix, int m, int n, int np, int k) {
+void print_matrix_at_k(double *matrix, int m, int n) {
 	for (int j = 0; j < n; j++) {
 		for (int i = 0; i < m; i++){
-			printf("%8.4f \t", matrix[get_offset(k, i, j, m, n)]);
+			printf("%9.3f \t", matrix[get_offset(i, j, m, n)]);
 		}
 		printf("\n");
 	}
 	printf("\n\n");
+}
+
+void copyMatrix(double *matrixSource, double *matrixDest, int n, int m) {
+for (int j = 0; j < n; j++) {
+		for (int i = 0; i < m; i++) {
+			matrixDest[get_offset(i, j, m, n)] = matrixSource[get_offset(i, j, m, n)];
+		}
+	}
 }
 
 
