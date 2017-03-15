@@ -54,19 +54,19 @@ int main(int argc, char** argv) {
 		printf("\n================================== Séquentiel ================================== \n");
 		init_matrix(matrix, M, N);
 		printf("Matrice initiale : \n");
-		print_matrix(matrix, M, N);
+		// print_matrix(matrix, M, N);
 		start_timer(&time_start);
-		sequential(matrix, M, N, NP, TD, H);
+		// sequential(matrix, M, N, NP, TD, H);
 		time_seq = stop_timer(&time_start);
 		printf("Matrice finale : \n");
-		print_matrix(matrix, M, N);
+		// print_matrix(matrix, M, N);
 		printf("================================================================================ \n\n\n");
 
 		// parallel
 		printf("\n================================== Parallèle ================================== \n");
 		init_matrix(matrix, M, N);
 		printf("Matrice initiale : \n");
-		print_matrix(matrix, M, N);
+		// print_matrix(matrix, M, N);
 
 	} else {
 		init_matrix(matrix, M, N);
@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
 	if (proc_rank == 0) {
 		time_parallel = stop_timer(&time_start);
 		printf("Matrice finale : \n");
-		print_matrix(matrix, M, N);
+		// print_matrix(matrix, M, N);
 		printf("================================================================================ \n\n\n");
 		acc = time_seq/time_parallel;
 		printf("Accéleration: %lf\n\n", acc );
@@ -234,8 +234,11 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 	get_managed_cells_by_k(managed_cells_offsets, proc_rank, nb_procs, m, n);
 	dependencies_proc_ranks = get_dependency_procs(managed_cells_offsets, proc_rank, nb_procs, m, n);
 
-	if (proc_rank == 2)
-		printf("I a %d, managing %d to %d\n", proc_rank, managed_cells_offsets[0], managed_cells_offsets[1]);
+	// if (proc_rank == 2)
+	// 	printf("I am %d, managing %d to %d\n", proc_rank, managed_cells_offsets[0], managed_cells_offsets[1]);
+	// if (proc_rank == 63)
+	// 	printf("I am %d, managing %d to %d\n", proc_rank, managed_cells_offsets[0], managed_cells_offsets[1]);
+
 
 	if (managed_cells_offsets[0] > -1){
 		for (int k = 1; k < np; k++) {
@@ -594,19 +597,18 @@ void get_managed_cells_by_k(int (&offset_range)[2], int proc_rank, int nb_procs,
 
 		if (m <= n) {
 			// 4
-			int nb_rows = (n-2) / nb_procs;
-			if (nb_rows == 0) nb_rows = 1;
-			if ((n-2) < nb_procs and proc_rank >= (n-2) || proc_rank * nb_rows >= (n-2)) {
+			int nb_rows = (n-2 + nb_procs - 1) / nb_procs; // round up
+			// if (nb_rows == 0) nb_rows = 1;
+			// if the proc rank is higher than the number of rows, or if the proc rank would overflow the matrix using the current nb_rows value
+			if ((n-2) < nb_procs and proc_rank >= (n-2) || ((proc_rank+1) * nb_rows) - nb_rows > (n-2)) {
 				offset_range[0] = -1;
 				offset_range[1] = -1;
 			} else {
 				int last_nb_rows = nb_rows;
-				if (nb_procs * nb_rows < (n-2)) {
-					last_nb_rows = (n-2) - (nb_procs * nb_rows) + nb_rows;
-				}
 				first_offset = proc_rank * nb_rows * (m-2);
 				offset_range[0] = first_offset;
-				if ((proc_rank+1) * nb_rows >= nb_rows * nb_procs) {
+				if ((proc_rank+1) * nb_rows > (n-2)) {
+					last_nb_rows = (n-2) - (proc_rank * nb_rows);
 					offset_range[1] = first_offset + (last_nb_rows * (m-2)) - 1;
 					// printf("I am %d and I manage %d rows\n", proc_rank, last_nb_rows);
 				} else {
@@ -617,22 +619,21 @@ void get_managed_cells_by_k(int (&offset_range)[2], int proc_rank, int nb_procs,
 
 		} else {
 			int nb_cols = ((m-2) + nb_procs - 1) / nb_procs;
-			if (nb_cols == 0) nb_cols = 1;
-			if ((m-2) < nb_procs and proc_rank >= (m-2) || proc_rank * nb_cols >= (m-2)) {
+			// if (nb_cols == 0) nb_cols = 1;
+			if ((m-2) < nb_procs and proc_rank >= (m-2) || ((proc_rank+1) * nb_cols) - nb_cols > (m-2)) {
 				offset_range[0] = -1;
 				offset_range[1] = -1;
 			} else {
 				int last_nb_cols = nb_cols;
-				if (nb_procs * nb_cols < (m-2)) {
-					// last_nb_cols = nb_cols - ((nb_procs * nb_cols) % (m-2));
-					last_nb_cols = (m-2) - (nb_procs * nb_cols) + nb_cols;
-				}
 				first_offset = proc_rank * nb_cols * (n-2);
 				offset_range[0] = first_offset;
-				if ((proc_rank+1) * nb_cols >= nb_cols * nb_procs) {
+				if ((proc_rank+1) * nb_cols > (m-2)) {
+					last_nb_cols = (m-2) - (proc_rank * nb_cols);
 					offset_range[1] = first_offset + (last_nb_cols * (n-2)) - 1;
+					// printf("I am %d and I manage %d cols\n", proc_rank, last_nb_cols);
 				} else {
 					offset_range[1] = first_offset + (nb_cols * (n-2)) - 1;
+					// printf("I am %d and I manage %d cols\n", proc_rank, nb_cols);
 				}				
 			}
 
@@ -707,7 +708,7 @@ std::vector<std::vector<std::vector<int> > > get_dependency_procs(int *offset_ra
 				dependencies[Z_DEPENDENCY][1] = offset_index;
 
 				if (dependency_directions[LEFT_DEPENDENCY] == 1) {
-					if (offset_index <= (offset_range[0] + (n-2))) {
+					if (offset_index < (offset_range[0] + (n-2))) {
 						dependencies[LEFT_DEPENDENCY][0] = proc_rank - 1;
 					} else {
 						dependencies[LEFT_DEPENDENCY][0] = proc_rank;
