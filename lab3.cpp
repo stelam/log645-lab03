@@ -264,13 +264,17 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 
 				std::fill_n(self_dependencies_directions, 5,-1);
 				for (int d = 0; d < MAX_NB_DEPENDENCIES; d++) {
-					if (dependencies_proc_ranks[cell_index][d][0] != proc_rank && dependencies_proc_ranks[cell_index][d][0] > -1)
+					if (dependencies_proc_ranks[cell_index][d][0] != proc_rank && dependencies_proc_ranks[cell_index][d][0] > -1){
 						nb_expected_msg++;
+						// if (proc_rank == 1)
+						// 	printf("I'm offset %d I have a dependency %d\n", local_offset, d);
+
+					}
 					else
 						self_dependencies_directions[d] = 1;
 				}
 
-
+				
 				//printf("WAITING MSG 3 %6.1d\n", k);
 				// if in first iteration, all values are already available from initialization
 				if (k == 1) {
@@ -394,7 +398,7 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 						// 	printf("\treceived a message: from proc_rank %f, for target offset %f, at k = %f \n", message[1], message[2], message[3]);
 						// }
 
-						if (proc_rank == 0) {
+						if (proc_rank == 1) {
 							// printf("received %d/%d for offset %d at k=%d from proc %f value = %f, target_offset = %f \n", nb_received_msg, nb_expected_msg, local_offset, k, received_message[1], received_message[0], received_message[2]);
 							// printf("%f\n", received_message[1]);
 							// printf("my last msg at index %d  \t\t\t\t %f, %f, %f: \n", (int)messages[(int)message[3]].size()-1, messages[(int)message[3]][messages[(int)message[3]].size()-1][1], messages[(int)message[3]][messages[(int)message[3]].size()-1][0], messages[(int)message[3]][messages[(int)message[3]].size()-1][2]);
@@ -565,17 +569,18 @@ void get_managed_cells_by_k(int (&offset_range)[2], int proc_rank, int nb_procs,
 	// int first_proc_rank = (((m-2)*(n-2))*k) % nb_procs;
 	int offset_index;
 	int first_offset;
+	int nb_effective_procs;
 
 	// if (matrix_size > nb_procs) {
 
 
 
 		if (m <= n) {
-			if ((n-2) < nb_procs and proc_rank >= (n-2)) {
+			int nb_rows = ((n-2) + nb_procs - 1) / nb_procs;
+			if ((n-2) < nb_procs and proc_rank >= (n-2) || proc_rank * nb_rows >= (n-2)) {
 				offset_range[0] = -1;
 				offset_range[1] = -1;
 			} else {
-				int nb_rows = ((n-2) + nb_procs - 1) / nb_procs;
 				int last_nb_rows = nb_rows;
 				if (nb_procs * nb_rows > (n-2)) {
 					last_nb_rows = (nb_procs * nb_rows) % (n-2);
@@ -644,6 +649,7 @@ std::vector<std::vector<std::vector<int> > > get_dependency_procs(int *offset_ra
 				}
 
 				if (dependency_directions[TOP_DEPENDENCY] == 1) {
+					// 17 <= (23 - 6)
 					if (offset_index <= (offset_range[1] - (m-2))) {
 						dependencies[TOP_DEPENDENCY][0] = proc_rank;
 					} else {
@@ -658,7 +664,7 @@ std::vector<std::vector<std::vector<int> > > get_dependency_procs(int *offset_ra
 				}
 
 				if (dependency_directions[BOTTOM_DEPENDENCY] == 1) {
-					if (offset_index <= (offset_range[0] + (m-2))){
+					if (offset_index < (offset_range[0] + (m-2))){
 						dependencies[BOTTOM_DEPENDENCY][0] = proc_rank - 1;
 					} else {
 						dependencies[BOTTOM_DEPENDENCY][0] = proc_rank;
