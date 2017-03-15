@@ -53,20 +53,20 @@ int main(int argc, char** argv) {
 		// sequential
 		printf("\n================================== Séquentiel ================================== \n");
 		init_matrix(matrix, M, N);
-		// printf("Matrice initiale : \n");
-		// print_matrix(matrix, M, N);
+		printf("Matrice initiale : \n");
+		print_matrix(matrix, M, N);
 		start_timer(&time_start);
 		sequential(matrix, M, N, NP, TD, H);
 		time_seq = stop_timer(&time_start);
-		// printf("Matrice finale : \n");
-		// print_matrix(matrix, M, N);
+		printf("Matrice finale : \n");
+		print_matrix(matrix, M, N);
 		printf("================================================================================ \n\n\n");
 
 		// parallel
 		printf("\n================================== Parallèle ================================== \n");
 		init_matrix(matrix, M, N);
-		// printf("Matrice initiale : \n");
-		// print_matrix(matrix, M, N);
+		printf("Matrice initiale : \n");
+		print_matrix(matrix, M, N);
 
 	} else {
 		init_matrix(matrix, M, N);
@@ -94,8 +94,8 @@ int main(int argc, char** argv) {
 
 	if (proc_rank == 0) {
 		time_parallel = stop_timer(&time_start);
-		// printf("Matrice finale : \n");
-		// print_matrix(matrix, M, N);
+		printf("Matrice finale : \n");
+		print_matrix(matrix, M, N);
 		printf("================================================================================ \n\n\n");
 		acc = time_seq/time_parallel;
 		printf("Accéleration: %lf\n\n", acc );
@@ -234,8 +234,8 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 	get_managed_cells_by_k(managed_cells_offsets, proc_rank, nb_procs, m, n);
 	dependencies_proc_ranks = get_dependency_procs(managed_cells_offsets, proc_rank, nb_procs, m, n);
 
-	// if (proc_rank == 63)
-	// 	printf("I a %d, managing %d to %d\n", proc_rank, managed_cells_offsets[0], managed_cells_offsets[1]);
+	if (proc_rank == 2)
+		printf("I a %d, managing %d to %d\n", proc_rank, managed_cells_offsets[0], managed_cells_offsets[1]);
 
 	if (managed_cells_offsets[0] > -1){
 		for (int k = 1; k < np; k++) {
@@ -246,8 +246,13 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 				/*printf("IN %d\n", managed_cells_offsets.size());*/
 
 				local_offset = managed_cells_offsets[0] + cell_index;
-				inner_i = local_offset % (m-2);
-				inner_j = local_offset / (m-2);
+				if ( m<=n){
+					inner_i = local_offset % (m-2);
+					inner_j = local_offset / (m-2);
+				} else {
+					inner_i = local_offset / (n-2);
+					inner_j = local_offset % (n-2);
+				}
 
 
 				// wait for neighbors messages
@@ -267,7 +272,7 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 				for (int d = 0; d < MAX_NB_DEPENDENCIES; d++) {
 					if (dependencies_proc_ranks[cell_index][d][0] != proc_rank && dependencies_proc_ranks[cell_index][d][0] > -1){
 						nb_expected_msg++;
-						// if (proc_rank == 63)
+						// if (proc_rank == 1)
 						// 	printf("I'm offset %d I have a dependency %d\n", local_offset, d);
 
 					}
@@ -290,7 +295,7 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 					// printf("dd %d\n", dependency_directions[LEFT_DEPENDENCY]);
 					current_cell_value = ((1 - ((4 * td) / (h*h))) * z_reference_value) + (td / (h*h)) * (top_reference_value+right_reference_value+bottom_reference_value+left_reference_value);
 					
-					// if (proc_rank == 0)
+					// if (proc_rank == 1)
 					// printf("I am proc %d at k = %d, offset = %d, my dependencies : %d %d %d %d\n", proc_rank, k, local_offset, dependency_directions[TOP_DEPENDENCY], dependency_directions[RIGHT_DEPENDENCY], dependency_directions[BOTTOM_DEPENDENCY], dependency_directions[LEFT_DEPENDENCY]);
 					// // store managed values
 					managed_values[k].push_back({current_cell_value, local_offset * 1.0});
@@ -310,8 +315,14 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 					for (int d = 0; d < MAX_NB_DEPENDENCIES; d++) {
 						for (int managed_value_index = 0; managed_value_index < (int)managed_values[k-1].size(); managed_value_index++) {
 
-							previous_managed_value_inner_i = (int)managed_values[k-1][managed_value_index][1] % (m-2);
-							previous_managed_value_inner_j = (int)managed_values[k-1][managed_value_index][1] / (m-2);
+							if (m <= n){
+								previous_managed_value_inner_i = (int)managed_values[k-1][managed_value_index][1] % (m-2);
+								previous_managed_value_inner_j = (int)managed_values[k-1][managed_value_index][1] / (m-2);
+							} else {
+								previous_managed_value_inner_i = (int)managed_values[k-1][managed_value_index][1] / (n-2);
+								previous_managed_value_inner_j = (int)managed_values[k-1][managed_value_index][1] % (n-2);								
+							}
+
 
 							if (self_dependencies_directions[d] == 1 && d == Z_DEPENDENCY){
 								if (previous_managed_value_inner_i == inner_i && previous_managed_value_inner_j == inner_j){
@@ -457,7 +468,7 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 					for (int d = 0; d < MAX_NB_DEPENDENCIES; d++) {
 						if (dependencies_proc_ranks[cell_index][d][0] >= 0 && dependencies_proc_ranks[cell_index][d][0] != proc_rank) {
 							message[2] = dependencies_proc_ranks[cell_index][d][1] * 1.0; // target_local_offset
-							//if (proc_rank == 63)		
+							// if (proc_rank == 0)		
 							// printf("\t\tI am %d at k = %d, managing offset %d, sending to proc %d at offset %d\n", proc_rank, k, local_offset, dependencies_proc_ranks[cell_index][d][0], (int)message[2]);
 							MPI_Send(&message.front(), 5, MPI_DOUBLE, dependencies_proc_ranks[cell_index][d][0], 0, MPI_COMM_WORLD);
 							// MPI_Isend(message.data(), 5, MPI_DOUBLE, target_dependant_proc_ranks[d][0], 0, MPI_COMM_WORLD, &request);
@@ -475,8 +486,13 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 		double final_message[5];
 
 		for (int d = 0; d < (int)managed_values[np-1].size(); d++) {
-			global_i = (int)managed_values[np-1][d][1] % (m-2);
-			global_j = (int)managed_values[np-1][d][1] / (m-2);
+			if (m <= n) {
+				global_i = (int)managed_values[np-1][d][1] % (m-2);
+				global_j = (int)managed_values[np-1][d][1] / (m-2);				
+			} else {
+				global_i = (int)managed_values[np-1][d][1] / (n-2);
+				global_j = (int)managed_values[np-1][d][1] % (n-2);
+			}
 
 			global_offset = get_offset_from_inner_i_j(global_i, global_j, m, n);
 			final_message[0] = managed_values[np-1][d][0];
@@ -579,6 +595,7 @@ void get_managed_cells_by_k(int (&offset_range)[2], int proc_rank, int nb_procs,
 		if (m <= n) {
 			// 4
 			int nb_rows = (n-2) / nb_procs;
+			if (nb_rows == 0) nb_rows = 1;
 			if ((n-2) < nb_procs and proc_rank >= (n-2) || proc_rank * nb_rows >= (n-2)) {
 				offset_range[0] = -1;
 				offset_range[1] = -1;
@@ -599,11 +616,12 @@ void get_managed_cells_by_k(int (&offset_range)[2], int proc_rank, int nb_procs,
 			}
 
 		} else {
-			if ((m-2) < nb_procs and proc_rank >= (m-2)) {
+			int nb_cols = ((m-2) + nb_procs - 1) / nb_procs;
+			if (nb_cols == 0) nb_cols = 1;
+			if ((m-2) < nb_procs and proc_rank >= (m-2) || proc_rank * nb_cols >= (m-2)) {
 				offset_range[0] = -1;
 				offset_range[1] = -1;
 			} else {
-				int nb_cols = ((m-2) + nb_procs - 1) / nb_procs;
 				int last_nb_cols = nb_cols;
 				if (nb_procs * nb_cols < (m-2)) {
 					// last_nb_cols = nb_cols - ((nb_procs * nb_cols) % (m-2));
@@ -682,7 +700,7 @@ std::vector<std::vector<std::vector<int> > > get_dependency_procs(int *offset_ra
 			}
 		} else {
 			for (int offset_index = offset_range[0]; offset_index <= offset_range[1]; offset_index++) {
-				dependency_directions = get_dependency_directions(offset_index, m, n, true);
+				dependency_directions = get_dependency_directions(offset_index, m, n, false);
 				dependencies = {{-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}};
 
 				dependencies[Z_DEPENDENCY][0] = proc_rank;
@@ -737,8 +755,8 @@ std::vector<int> get_dependency_directions(int local_offset, int m, int n, bool 
 		i = local_offset % (m-2);
 		j = local_offset / (m-2);		
 	} else {
-		i = local_offset / (m-2);
-		j = local_offset % (m-2);
+		i = local_offset / (n-2); // 7 / 8
+		j = local_offset % (n-2); // 7 % 8
 	}
 
 
