@@ -234,7 +234,8 @@ void parallel(int nb_procs, int proc_rank, double matrix[], int m, int n, int np
 	get_managed_cells_by_k(managed_cells_offsets, proc_rank, nb_procs, m, n);
 	dependencies_proc_ranks = get_dependency_procs(managed_cells_offsets, proc_rank, nb_procs, m, n);
 
-	// printf("I a %d, managing %d to %d\n", proc_rank, managed_cells_offsets[0], managed_cells_offsets[1]);
+	// if (proc_rank == 9)
+		// printf("I a %d, managing %d to %d\n", proc_rank, managed_cells_offsets[0], managed_cells_offsets[1]);
 
 	if (managed_cells_offsets[0] > -1){
 		for (int k = 1; k < np; k++) {
@@ -576,6 +577,7 @@ void get_managed_cells_by_k(int (&offset_range)[2], int proc_rank, int nb_procs,
 
 
 		if (m <= n) {
+			// (198 + 9) / 10 = 20
 			int nb_rows = ((n-2) + nb_procs - 1) / nb_procs;
 			if ((n-2) < nb_procs and proc_rank >= (n-2) || proc_rank * nb_rows >= (n-2)) {
 				offset_range[0] = -1;
@@ -583,14 +585,16 @@ void get_managed_cells_by_k(int (&offset_range)[2], int proc_rank, int nb_procs,
 			} else {
 				int last_nb_rows = nb_rows;
 				if (nb_procs * nb_rows > (n-2)) {
-					last_nb_rows = (nb_procs * nb_rows) % (n-2);
+					last_nb_rows = nb_rows - ((nb_procs * nb_rows) % (n-2));
 				}
 				first_offset = proc_rank * nb_rows * (m-2);
 				offset_range[0] = first_offset;
-				if (proc_rank * nb_rows > (n-2)) {
+				if ((proc_rank+1) * nb_rows > (n-2)) {
 					offset_range[1] = first_offset + (last_nb_rows * (m-2)) - 1;
+					// printf("I am %d and I manage %d rows\n", proc_rank, last_nb_rows);
 				} else {
 					offset_range[1] = first_offset + (nb_rows * (m-2)) - 1;
+					// printf("I am %d and I manage %d rows\n", proc_rank, nb_rows);
 				}				
 			}
 
@@ -602,11 +606,11 @@ void get_managed_cells_by_k(int (&offset_range)[2], int proc_rank, int nb_procs,
 				int nb_cols = ((m-2) + nb_procs - 1) / nb_procs;
 				int last_nb_cols = nb_cols;
 				if (nb_procs * nb_cols > (m-2)) {
-					last_nb_cols = (nb_procs * nb_cols) % (m-2);
+					last_nb_cols = nb_cols - ((nb_procs * nb_cols) % (m-2));
 				}
 				first_offset = proc_rank * nb_cols * (n-2);
 				offset_range[0] = first_offset;
-				if (proc_rank * nb_cols > (m-2)) {
+				if ((proc_rank+1) * nb_cols > (m-2)) {
 					offset_range[1] = first_offset + (last_nb_cols * (n-2)) - 1;
 				} else {
 					offset_range[1] = first_offset + (nb_cols * (n-2)) - 1;
