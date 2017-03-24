@@ -11,16 +11,16 @@
 #define SLEEP_TIME 5
 
 void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_rank);
-void print_matrix_at_k(double *matrix, int m, int n);
+void print_matrix(double *matrix, int m, int n);
 void init_matrix(double *matrix, int m, int n);
 int get_offset(int i, int j, int m, int n);
-void dispatchTask(int m, int n, int nb_procs);
-void processResult(double *matrix, int m, int n, int np);
-void executeTask(int m, int n, double td, double h);
+void dispatch_task(int m, int n, int nb_procs);
+void process_result(double *matrix, int m, int n, int np);
+void execute_task(int m, int n, double td, double h);
 void sequential(double *matrix, int m, int n, int np, double td, double h);
 void start_timer(double *time_start);
 double stop_timer(double *time_start);
-void copyMatrix(double *matrixSource, double *matrixDest, int n, int m);
+void copy_matrix(double *matrix_source, double *matrix_dest, int n, int m);
 
 int main(int argc, char** argv) {
 	const int N = atoi(argv[1]);
@@ -29,11 +29,12 @@ int main(int argc, char** argv) {
 	const double TD = atof(argv[4]);
 	const double H = atof(argv[5]);
 	const int NB_PROCS = atoi(argv[6]);
+	const int DISABLE_SEQUENTIAL_AND_DISPLAY = atoi(argv[7]);
+
 
 	double matrix[M * N];
 	int number_of_processors, processor_rank;
 	double time_seq, time_parallel, acc, time_start;
-
 
 	initMPI(&argc, &argv, number_of_processors, processor_rank);
 
@@ -42,33 +43,48 @@ int main(int argc, char** argv) {
 	if(processor_rank == 0) {
 		printf("\n================================== Initiale ================================== \n");
 		init_matrix(matrix, M, N);
-		printf("Matrice initiale : \n");
-		print_matrix_at_k(matrix, M, N);
-		printf("\n================================== Séquentiel ================================== \n");
-		start_timer(&time_start);
-		sequential(matrix, M, N, NP, TD, H);
-		time_seq = stop_timer(&time_start);
-		printf("Matrice finale : \n");
-		print_matrix_at_k(matrix, M, N);
+		if (DISABLE_SEQUENTIAL_AND_DISPLAY != 1) {
+			printf("Matrice initiale : \n");
+			print_matrix(matrix, M, N);
+			printf("\n================================== Séquentiel ================================== \n");
+			start_timer(&time_start);
+			sequential(matrix, M, N, NP, TD, H);
+			time_seq = stop_timer(&time_start);
+			printf("Matrice finale : \n");
+			print_matrix(matrix, M, N);
+		}
+
 		printf("\n================================== Parallel ================================== \n");
 		init_matrix(matrix, M, N);
+		if (DISABLE_SEQUENTIAL_AND_DISPLAY != 1) {
+			print_matrix(matrix, M, N) ;
+		}
+	}
+
+	MPI_Barrier(MPI_COMM_WORLD);
+
+	if (processor_rank == 0) {
 		start_timer(&time_start);
-		processResult(matrix, M, N, NP);
+		process_result(matrix, M, N, NP);
 		time_parallel = stop_timer(&time_start);
-		printf("Matrice finale : \n");
-		print_matrix_at_k(matrix, M, N) ;
+		if (DISABLE_SEQUENTIAL_AND_DISPLAY != 1) {
+			printf("Matrice finale : \n");
+			print_matrix(matrix, M, N) ;
+		}
 		printf("================================================================================ \n");
 
 		acc = time_seq/time_parallel;
+		printf("Temps séquentiel: %lf\n", time_seq);
+		printf("Temps parallèle: %lf\n", time_parallel);
 		printf("Accéleration: %lf\n\n", acc );
-
 	}
+
 	else if(processor_rank == 1) {
-		(NB_PROCS < nbCaseCalc)?dispatchTask(M, N, NB_PROCS):dispatchTask(M, N, nbCaseCalc);		
+		(NB_PROCS < nbCaseCalc)?dispatch_task(M, N, NB_PROCS):dispatch_task(M, N, nbCaseCalc);		
 
 	}
 	else if(processor_rank < NB_PROCS && processor_rank < nbCaseCalc){
-		executeTask(M, N, TD, H);
+		execute_task(M, N, TD, H);
 	}
 
 	MPI_Finalize();	
@@ -94,11 +110,12 @@ void initMPI(int *argc, char ***argv, int &number_of_processors, int &processor_
 /*
 * Function: get_offset
 * ----------------------------
-*   Transforms a 3D set of params into a 1D param (index) in order to get equivalent index in a 1D array.
+*   Transforms a 2D set of params into a 1D param (index) in order to get equivalent index in a 1D array.
 *
-*   k: the k index (iteration #)
 *   i: the i param of a 2D array (m on x axis)
 *   j: the j param of a 2D array (n on y axis)
+*   m: the number of columns
+*   n: the number of rows
 *
 *   returns: the 1D index equivalent (offset)
 */
@@ -107,12 +124,29 @@ int get_offset(int i, int j, int m, int n) {
 }
 
 
+/*
+* Function: start_timer
+* ----------------------------
+*   Starts a timer and store the moment at which the timer has started into a given variable.
+*
+*   time_start: the variable that'll store the moment at which the timer had started
+*/
 void start_timer(double *time_start) {
 	struct timeval tp;
 	gettimeofday (&tp, NULL); // Debut du chronometre
 	*time_start = (double) (tp.tv_sec) + (double) (tp.tv_usec) / 1e6;
 }
 
+
+/*
+* Function: stop_timer
+* ----------------------------
+*   Given a start time, calculates the delta between the function call and the start time. Prints the calculated value.
+*
+*   time_start: the time from which the delta should be calculated from
+*
+*   returns: the delta
+*/
 double stop_timer(double *time_start) {
 	struct timeval tp;
 	double timeEnd, Texec;
@@ -124,25 +158,37 @@ double stop_timer(double *time_start) {
 }
 
 
+/*
+* Function: sequential
+* ----------------------------
+*   Sequential function to calculate the heat transfer for a 2D plate
+*
+*   matrix: the 2D matrix representing the plate
+*	m: the number of columns of the plate
+*	n: the number of rows of the plate
+*	np: the number of steps (iterations)
+*	td: the discretized time value
+*	h: the size of a subdivision
+*/
 void sequential(double *matrix, int m, int n, int np, double td, double h) {
 
-	double ref1, ref2, ref3, ref4, ref5, matrixCurrent[m * n];
+	double ref1, ref2, ref3, ref4, ref5, matrix_current[m * n];
 
 	//process
 	for (int k = 1; k < np; k++) {
 
-	copyMatrix(matrix, matrixCurrent, n, m);
+	copy_matrix(matrix, matrix_current, n, m);
 
 		for (int j = 0; j < n; j++) {
 			for (int i = 0; i < m; i++) {
 				if (i == 0 || i == m -1 || j == 0 || j == n - 1) {
 					matrix[get_offset(i, j, m, n)] = 0;
 				} else {
-					ref1 = matrixCurrent[get_offset(i, j, m, n)];
-					ref2 = matrixCurrent[get_offset(i-1, j, m, n)];
-					ref3 = matrixCurrent[get_offset(i+1, j, m, n)];
-					ref4 = matrixCurrent[get_offset(i, j-1, m, n)];
-					ref5 = matrixCurrent[get_offset(i, j+1, m, n)];
+					ref1 = matrix_current[get_offset(i, j, m, n)];
+					ref2 = matrix_current[get_offset(i-1, j, m, n)];
+					ref3 = matrix_current[get_offset(i+1, j, m, n)];
+					ref4 = matrix_current[get_offset(i, j-1, m, n)];
+					ref5 = matrix_current[get_offset(i, j+1, m, n)];
 									
 					matrix[get_offset(i, j, m, n)] = ((1 - ((4 * td) / (h*h))) * ref1) + (td / (h*h)) * (ref2+ref3+ref4+ref5);
 				}
@@ -154,13 +200,23 @@ void sequential(double *matrix, int m, int n, int np, double td, double h) {
 	}
 }
 
-void dispatchTask(int m, int n, int nb_procs) {
-	int procRank = 2, tailleMatrix = m * n;
-	double matrix[tailleMatrix+1], refs[8], continu = 1;
+/*
+* Function: dispatch_task
+* ----------------------------
+*   Function called by proc_rank 1
+*	For each step (k), dispatches the needed value to a slave processor so it can calculate a new value for a specific cell of the plate
+*
+*	m: the number of columns of the plate
+*	n: the number of rows of the plate
+*	nb_procs: the number of processors
+*/
+void dispatch_task(int m, int n, int nb_procs) {
+	int procRank = 2, matrix_size = m * n;
+	double matrix[matrix_size+1], refs[8], continu = 1;
 	
 	while (continu == 1) {
-		MPI_Recv(matrix, tailleMatrix+1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-		continu = matrix[tailleMatrix];
+		MPI_Recv(matrix, matrix_size+1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		continu = matrix[matrix_size];
 
 		if (continu != 0)
 		{	
@@ -192,15 +248,28 @@ void dispatchTask(int m, int n, int nb_procs) {
 	}
 }
 
-void processResult(double *matrix, int m, int n, int np) {
-	int tailleMatrix = m * n, ri, rj;
-	double matrixCurrent[tailleMatrix+1], result[3], res;
 
-	copyMatrix(matrix, matrixCurrent, n, m);
-	matrixCurrent[tailleMatrix] = 1;
+/*
+* Function: process_result
+* ----------------------------
+*   Function called by proc_rank 0
+*	Waits for the slaves' calculations results and aggregate them in the plate matrix. After each step (k), sends
+* 	the updated matrix to proc_rank 1 (dispatcher)
+*
+*	matrix: the matrix that contains the initial values
+*	m: the number of columns of the plate
+*	n: the number of rows of the plate
+*	np: the number of steps
+*/
+void process_result(double *matrix, int m, int n, int np) {
+	int matrix_size = m * n, ri, rj;
+	double matrix_current[matrix_size+1], result[3], res;
+
+	copy_matrix(matrix, matrix_current, n, m);
+	matrix_current[matrix_size] = 1;
 	
 	for (int k = 1; k < np; k++) {
-		MPI_Send(matrixCurrent, tailleMatrix+1, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+		MPI_Send(matrix_current, matrix_size+1, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
 		for (int j = 1; j < n-1; j++) {
 			for (int i = 1; i < m-1; i++) {
 				MPI_Recv(result, 3, MPI_DOUBLE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -208,15 +277,26 @@ void processResult(double *matrix, int m, int n, int np) {
 				rj = (int)(result[1]);
 				res = result[2];
 				matrix[get_offset(ri, rj, m, n)] = res;
-				matrixCurrent[get_offset(ri, rj, m, n)] = res;
+				matrix_current[get_offset(ri, rj, m, n)] = res;
 			}
 		}
 	}
-	matrixCurrent[tailleMatrix] = 0;
-	MPI_Send(matrixCurrent, tailleMatrix+1, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+	matrix_current[matrix_size] = 0;
+	MPI_Send(matrix_current, matrix_size+1, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
 }
 
-void executeTask(int m, int n, double td, double h) {
+/*
+* Function: execute_task
+* ----------------------------
+*   Function called by all elligible slave processors
+*	Calculates the new value at a given certain step, receives the instructions from proc_rank 1 and sends the results to proc_rank 0
+*
+*	m: the number of columns of the plate
+*	n: the number of rows of the plate
+*	td: the discretized time
+*	h: the size of a subdivision
+*/
+void execute_task(int m, int n, double td, double h) {
 	double refs[8], ref1, ref2, ref3, ref4, ref5, result[3], continu = 1;
 	int i, j; 
 
@@ -269,27 +349,38 @@ void init_matrix(double *matrix, int m, int n) {
 }
 
 /*
-* Function: print_matrix_at_k
+* Function: print_matrix
 * ----------------------------
-*	Prints the last matrix that is the result of a series of operations
+*	Prints the matrix
 *
 *   matrix: the 1D array containing the matrix
 *
 */
-void print_matrix_at_k(double *matrix, int m, int n) {
+void print_matrix(double *matrix, int m, int n) {
 	for (int j = 0; j < n; j++) {
 		for (int i = 0; i < m; i++){
-			printf("%9.3f \t", matrix[get_offset(i, j, m, n)]);
+			printf("%7.1f \t", matrix[get_offset(i, j, m, n)]);
 		}
 		printf("\n");
 	}
 	printf("\n\n");
 }
 
-void copyMatrix(double *matrixSource, double *matrixDest, int n, int m) {
-for (int j = 0; j < n; j++) {
+/*
+* Function: copy_matrix
+* ----------------------------
+*	Makes a copy of a 2D matrix from a variable to another
+*
+*	matrix_source: the matrix to copy
+*   matrix_dest: the place where the matrix should be copied
+*	n: the number of rows
+*	m: the number of columns
+*
+*/
+void copy_matrix(double *matrix_source, double *matrix_dest, int n, int m) {
+	for (int j = 0; j < n; j++) {
 		for (int i = 0; i < m; i++) {
-			matrixDest[get_offset(i, j, m, n)] = matrixSource[get_offset(i, j, m, n)];
+			matrix_dest[get_offset(i, j, m, n)] = matrix_source[get_offset(i, j, m, n)];
 		}
 	}
 }
